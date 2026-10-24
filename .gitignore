@@ -4,6 +4,8 @@
 !.env.example
 etc/email.env
 **/email.env
+**/sudo_password
+.sudo_password
 *.pem
 *.key
 id_rsa*
