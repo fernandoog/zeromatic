@@ -1,0 +1,12 @@
+# Añadir / fusionar en /etc/mgetty/mgetty.config
+
+debug 5
+speed 115200
+issue-file /etc/issue.mgetty
+
+port ttyACM0
+  speed 115200
+  data-only n
+  modem-type data
+  toggle-dtr y
+  rings 3

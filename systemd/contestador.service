@@ -1,0 +1,24 @@
+[Unit]
+Description=Contestador automático (módem USB Conexant CX93010)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=MODEM_DEVICE=/dev/ttyACM0
+Environment=MODEM_BAUD=115200
+Environment=RINGS_TO_ANSWER=1
+Environment=MAX_RECORD_SEC=120
+ExecStartPre=/bin/sleep 2
+ExecStart=/opt/contestador/venv/bin/python3 /opt/contestador/bin/contestador_daemon.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+KillMode=mixed
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
