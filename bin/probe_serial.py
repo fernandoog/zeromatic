@@ -3,9 +3,9 @@ import serial
 import time
 import subprocess
 
-subprocess.call(["systemctl", "stop", "buzonera"])
+subprocess.call(["systemctl", "stop", "zeromatic"])
 time.sleep(2)
-subprocess.call(["pkill", "-9", "-f", "buzonera_daemon"])
+subprocess.call(["pkill", "-9", "-f", "zeromatic_daemon"])
 time.sleep(1)
 
 print("fuser:", subprocess.getoutput("fuser -v /dev/ttyACM0 2>&1"))

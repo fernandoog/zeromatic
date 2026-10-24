@@ -1,4 +1,4 @@
-# Deploy Buzonera sources to a Raspberry Pi over SSH.
+# Deploy Zeromatic sources to a Raspberry Pi over SSH.
 # Example:
 #   .\scripts\deploy_from_pc.ps1 -HostName 192.168.1.23 -User pi -IdentityFile "$env:USERPROFILE\.ssh\id_ed25519"
 
@@ -10,7 +10,7 @@ param(
 
     [string]$IdentityFile = "",
 
-    [string]$RemoteTmp = "/tmp/buzonera-deploy"
+    [string]$RemoteTmp = "/tmp/zeromatic-deploy"
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,7 +23,7 @@ if ($IdentityFile) {
 $target = "${User}@${HostName}"
 
 Write-Host "Packaging from $Root ..."
-$tar = Join-Path $env:TEMP "buzonera-deploy.tgz"
+$tar = Join-Path $env:TEMP "zeromatic-deploy.tgz"
 if (Test-Path $tar) { Remove-Item $tar -Force }
 
 Push-Location $Root
@@ -39,7 +39,7 @@ try {
 
 Write-Host "Uploading to $target:$RemoteTmp ..."
 ssh @sshArgs $target "rm -rf $RemoteTmp && mkdir -p $RemoteTmp"
-scp @sshArgs $tar "${target}:/tmp/buzonera-deploy.tgz"
-ssh @sshArgs $target "tar -xzf /tmp/buzonera-deploy.tgz -C $RemoteTmp && sudo bash $RemoteTmp/bin/install_on_pi.sh $RemoteTmp"
+scp @sshArgs $tar "${target}:/tmp/zeromatic-deploy.tgz"
+ssh @sshArgs $target "tar -xzf /tmp/zeromatic-deploy.tgz -C $RemoteTmp && sudo bash $RemoteTmp/bin/install_on_pi.sh $RemoteTmp"
 
-Write-Host "Done. Check: ssh $target 'systemctl is-active buzonera'"
+Write-Host "Done. Check: ssh $target 'systemctl is-active zeromatic'"

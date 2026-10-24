@@ -31,10 +31,10 @@ Firmware típico: `CX93001-EIS_V0.2013-V92` (`ATI3`).
 Con el servicio parado:
 
 ```bash
-sudo systemctl stop buzonera
-sudo /opt/buzonera/venv/bin/python3 /opt/buzonera/bin/hw_modem_test.py
-sudo /opt/buzonera/venv/bin/python3 /opt/buzonera/bin/hw_voice_probe.py
-sudo systemctl start buzonera
+sudo systemctl stop zeromatic
+sudo /opt/zeromatic/venv/bin/python3 /opt/zeromatic/bin/hw_modem_test.py
+sudo /opt/zeromatic/venv/bin/python3 /opt/zeromatic/bin/hw_voice_probe.py
+sudo systemctl start zeromatic
 ```
 
 Esperado: AT OK, `FCLASS` incluye `8`, `AT+VRX` → `CONNECT`, sin `NO DIALTONE` si hay línea.

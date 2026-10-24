@@ -4,7 +4,7 @@ import time
 import serial
 import subprocess
 
-subprocess.call(["systemctl", "stop", "buzonera"])
+subprocess.call(["systemctl", "stop", "zeromatic"])
 time.sleep(1)
 
 dev = "/sys/bus/usb/devices/1-1"

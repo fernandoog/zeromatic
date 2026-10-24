@@ -3,9 +3,9 @@
 set -euo pipefail
 
 SRC="${1:-}"
-LOG=/var/log/buzonera.log
+LOG=/var/log/zeromatic.log
 WORKDIR=/var/spool/voice/processed
-ENV_FILE=/etc/buzonera/email.env
+ENV_FILE=/etc/zeromatic/email.env
 mkdir -p "$WORKDIR"
 exec >>"$LOG" 2>&1
 
@@ -65,7 +65,7 @@ case "${SRC,,}" in
     cp "$SRC" "$WAV"
     ;;
   *.rmd)
-    if ! rmdtopvf "$SRC" | pvftowav >"$WAV" 2>/tmp/buzonera_conv.err; then
+    if ! rmdtopvf "$SRC" | pvftowav >"$WAV" 2>/tmp/zeromatic_conv.err; then
       echo "$(ts) WARN rmdtopvf falló"
       cp "$SRC" "$OUTDIR/mensaje.rmd"
     fi
@@ -87,10 +87,10 @@ fi
 # Transcripción
 export CONTESTADOR_WAV="$WAV"
 export CONTESTADOR_TXT="$TXT"
-/opt/buzonera/bin/transcribe.py || echo "(sin transcripción)" >"$TXT"
+/opt/zeromatic/bin/transcribe.py || echo "(sin transcripción)" >"$TXT"
 
 # Envío de correo
-/opt/buzonera/bin/send_mail.py \
+/opt/zeromatic/bin/send_mail.py \
   --meta "$META" \
   --transcript "$TXT" \
   --audio "${MP3:-$WAV}" \

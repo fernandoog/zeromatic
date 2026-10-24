@@ -1,6 +1,6 @@
 #!/bin/bash
 set -eu
-systemctl stop buzonera 2>/dev/null || true
+systemctl stop zeromatic 2>/dev/null || true
 sleep 1
 echo "=== devices ==="
 ls -la /dev/ttyACM* 2>/dev/null || true

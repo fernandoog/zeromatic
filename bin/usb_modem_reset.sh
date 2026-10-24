@@ -1,13 +1,13 @@
 #!/bin/bash
 # Reset USB del módem Conexant + redeploy daemon
 set -euo pipefail
-systemctl stop buzonera.service || true
-pkill -9 -f buzonera_daemon.py 2>/dev/null || true
+systemctl stop zeromatic.service || true
+pkill -9 -f zeromatic_daemon.py 2>/dev/null || true
 sleep 1
 
 # Reset AT si el nodo existe
 if [[ -c /dev/ttyACM0 ]]; then
-  /opt/buzonera/venv/bin/python3 - <<'PY'
+  /opt/zeromatic/venv/bin/python3 - <<'PY'
 import serial, time
 ser = serial.Serial("/dev/ttyACM0", 115200, timeout=0.4, rtscts=True)
 time.sleep(0.4)
@@ -42,7 +42,7 @@ ls -l /dev/ttyACM0
 lsusb | grep -i conexant || true
 
 # Verificar RING path
-/opt/buzonera/venv/bin/python3 - <<'PY'
+/opt/zeromatic/venv/bin/python3 - <<'PY'
 import serial, time
 ser = serial.Serial("/dev/ttyACM0", 115200, timeout=0.3, rtscts=True)
 time.sleep(0.4)
@@ -64,17 +64,17 @@ print("modem ready for RING/autoanswer")
 ser.close()
 PY
 
-install -m 755 /tmp/buzonera_daemon.py /opt/buzonera/bin/buzonera_daemon.py
+install -m 755 /tmp/zeromatic_daemon.py /opt/zeromatic/bin/zeromatic_daemon.py
 python3 - <<'PY'
 from pathlib import Path
-p = Path("/opt/buzonera/bin/buzonera_daemon.py")
+p = Path("/opt/zeromatic/bin/zeromatic_daemon.py")
 lines = p.read_text().splitlines(True)
-lines[0] = "#!/opt/buzonera/venv/bin/python3\n"
+lines[0] = "#!/opt/zeromatic/venv/bin/python3\n"
 p.write_text("".join(lines))
 PY
 
-systemctl start buzonera.service
+systemctl start zeromatic.service
 sleep 5
-systemctl is-active buzonera
-journalctl -u buzonera -n 15 --no-pager
+systemctl is-active zeromatic
+journalctl -u zeromatic -n 15 --no-pager
 fuser -v /dev/ttyACM0 2>&1 || true

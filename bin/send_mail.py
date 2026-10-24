@@ -12,7 +12,7 @@ from email.message import EmailMessage
 from pathlib import Path
 
 
-def load_env(path: Path = Path("/etc/buzonera/email.env")) -> dict[str, str]:
+def load_env(path: Path = Path("/etc/zeromatic/email.env")) -> dict[str, str]:
     cfg: dict[str, str] = {}
     if not path.exists():
         raise SystemExit(f"Falta {path}. Copia email.env.example y pon la App Password.")
@@ -64,11 +64,11 @@ def main() -> int:
     called = meta_field("called-id", "") or cfg.get("LINE_NUMBER", "") or cfg.get("CALLED_ID", "") or "no configurado"
 
     msg = EmailMessage()
-    msg["Subject"] = f"[Buzonera] Mensaje de {caller}"
+    msg["Subject"] = f"[Zeromatic] Mensaje de {caller}"
     msg["From"] = mail_from
     msg["To"] = mail_to
     msg.set_content(
-        "Nuevo mensaje en Buzonera.\n\n"
+        "Nuevo mensaje en Zeromatic.\n\n"
         f"Quién llama (Caller-ID): {caller}\n"
         f"Línea contestada (Called-ID): {called}\n\n"
         f"{meta}\n"

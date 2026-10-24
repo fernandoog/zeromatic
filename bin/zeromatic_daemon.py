@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Buzonera — contestador telefónico para módem Conexant CX930xx (V.253).
+Zeromatic — contestador telefónico para módem Conexant CX930xx (V.253).
 Responde, reproduce locución, graba y dispara el pipeline de correo.
 """
 from __future__ import annotations
@@ -17,6 +17,26 @@ from pathlib import Path
 
 import serial
 
+def _detect_root() -> Path:
+    """Instalación viva: Zeromatic o rutas legadas."""
+    for p in (Path("/opt/zeromatic"), Path("/opt/buzonera"), Path("/opt/contestador")):
+        if p.is_dir():
+            return p
+    return Path("/opt/zeromatic")
+
+
+INSTALL_ROOT = Path(os.environ.get("ZEROMATIC_ROOT", str(_detect_root())))
+
+
+def _detect_etc() -> Path:
+    for p in (Path("/etc/zeromatic"), Path("/etc/buzonera"), Path("/etc/contestador")):
+        if p.is_dir() or (p / "email.env").is_file():
+            return p
+    return Path("/etc") / INSTALL_ROOT.name
+
+
+ETC_ROOT = _detect_etc()
+
 DEVICE = os.environ.get("MODEM_DEVICE", "/dev/ttyACM0")
 BAUD = int(os.environ.get("MODEM_BAUD", "115200"))
 RINGS_TO_ANSWER = int(os.environ.get("RINGS_TO_ANSWER", "1"))
@@ -27,10 +47,16 @@ SILENCE_HANG_SEC = float(os.environ.get("SILENCE_HANG_SEC", "2.0"))
 SILENCE_RMS_THRESH = float(os.environ.get("SILENCE_RMS_THRESH", "10"))
 # No cortar por silencio antes de haber grabado al menos esto
 MIN_MESSAGE_SEC = float(os.environ.get("MIN_MESSAGE_SEC", "1.0"))
-GREETING_WAV = Path(os.environ.get("GREETING_WAV", "/opt/buzonera/media/greeting.wav"))
+GREETING_WAV = Path(os.environ.get("GREETING_WAV", str(INSTALL_ROOT / "media" / "greeting.wav")))
 INCOMING_DIR = Path(os.environ.get("INCOMING_DIR", "/var/spool/voice/incoming"))
-ON_MESSAGE = Path(os.environ.get("ON_MESSAGE", "/opt/buzonera/bin/on_message.sh"))
-LOG_PATH = Path(os.environ.get("BUZONERA_LOG", "/var/log/buzonera_daemon.log"))
+ON_MESSAGE = Path(os.environ.get("ON_MESSAGE", str(INSTALL_ROOT / "bin" / "on_message.sh")))
+_log_default = f"/var/log/{INSTALL_ROOT.name}_daemon.log"
+LOG_PATH = Path(
+    os.environ.get(
+        "ZEROMATIC_LOG",
+        os.environ.get("BUZONERA_LOG", os.environ.get("CONTESTADOR_LOG", _log_default)),
+    )
+)
 
 DLE = 0x10
 ETX = 0x03
@@ -570,15 +596,16 @@ class Modem:
         logging.error("No se pudo reproducir locución PCM")
 
     def beep(self) -> None:
-        self.cmd("AT+VLS=1", wait=1.0, expect_ok=False)
-        r = self.cmd("AT+VTS=[933,0,1000]", wait=3, expect_ok=False)
+        """Beep corto (~0.4 s) justo antes de grabar."""
+        self.cmd("AT+VLS=1", wait=0.6, expect_ok=False)
+        r = self.cmd("AT+VTS=[933,0,400]", wait=1.2, expect_ok=False)
         if "ERROR" in r.upper() and "OK" not in r.upper():
-            beep = synth_beep_u8(933, 1.0)
-            self.cmd("AT+VLS=1", wait=1.0, expect_ok=False)
+            beep = synth_beep_u8(933, 0.4)
+            self.cmd("AT+VLS=1", wait=0.5, expect_ok=False)
             self._vtx_send(beep)
 
     def _finish_record(self, out_wav: Path, data: bytes, reason: str) -> int:
-        """Cierra VRX, recorta silencio final y guarda WAV."""
+        """Cierra VRX, recorta silencio final (no el inicio) y guarda WAV."""
         try:
             self.write(bytes([DLE, ETX]))
         except Exception:
@@ -588,7 +615,7 @@ class Modem:
             self.ser.read(self.ser.in_waiting or 0)
         except Exception:
             pass
-        trimmed = trim_u8_pcm(data)
+        trimmed = trim_u8_pcm(data, trim_lead=False)
         write_u8_wav(out_wav, trimmed)
         sec = len(trimmed) / 8000.0
         logging.info(
@@ -609,8 +636,9 @@ class Modem:
             logging.warning("VRX no disponible (%r) — no grabo para no bloquear", r[:60])
             write_u8_wav(out_wav, b"")
             return 0
-        time.sleep(0.2)
-        self.ser.reset_input_buffer()
+        # No vaciar el buffer: el primer audio ya está llegando (si lo tiramos,
+        # se pierde el inicio del mensaje — ~1–2 s).
+        time.sleep(0.05)
         data = bytearray()
         start = time.time()
         got_audio_at = None
@@ -721,7 +749,7 @@ def shield_dle(data: bytes) -> bytes:
 
 def wav_to_u8_8k(path: Path) -> bytes:
     """Devuelve PCM unsigned 8-bit mono 8 kHz (un poco más alto para línea telefónica)."""
-    tmp = Path("/tmp/buzonera_play.wav")
+    tmp = Path("/tmp/zeromatic_play.wav")
     # vol +6 dB: la línea/módem atenúan; evitar locución inaudible
     subprocess.check_call(
         [
@@ -747,22 +775,33 @@ def wav_to_u8_8k(path: Path) -> bytes:
         return w.readframes(w.getnframes())
 
 
-def trim_u8_pcm(pcm: bytes, thresh: int = 10, pad_ms: int = 150) -> bytes:
-    """Recorta silencio al inicio/final del PCM u8 (centro 128)."""
+def trim_u8_pcm(
+    pcm: bytes,
+    thresh: int = 10,
+    pad_ms: int = 200,
+    trim_lead: bool = False,
+) -> bytes:
+    """Recorta silencio del PCM u8 (centro 128).
+
+    Por defecto solo recorta el final: el inicio del mensaje a menudo es voz
+    suave y un trim de cabeza se come las primeras palabras.
+    """
     if not pcm:
         return pcm
     thr = thresh
     first = 0
     last = len(pcm) - 1
-    while first < len(pcm) and abs(pcm[first] - 128) <= thr:
-        first += 1
+    if trim_lead:
+        # Como mucho 0.3 s de silencio inicial
+        lead_cap = int(8000 * 0.3)
+        while first < len(pcm) and first < lead_cap and abs(pcm[first] - 128) <= thr:
+            first += 1
+        first = max(0, first - int(8000 * pad_ms / 1000))
     while last > first and abs(pcm[last] - 128) <= thr:
         last -= 1
     pad = int(8000 * pad_ms / 1000)
-    first = max(0, first - pad)
     last = min(len(pcm) - 1, last + pad)
-    # También recortar tono de marcación final: bloque final muy estable
-    # (si los últimos 1.5 s tienen poca varianza, cortarlos)
+    # Tono de marcación final (seno estable)
     tail = int(8000 * 1.5)
     if last - first > tail + 8000:
         region = pcm[last - tail + 1 : last + 1]
@@ -822,12 +861,17 @@ def normalize_caller(raw: str) -> str:
 
 
 def load_called_id() -> str:
-    """Número de esta línea (Called-ID), desde env o /etc/buzonera/email.env."""
+    """Número de esta línea (Called-ID), desde env o email.env."""
     for key in ("CALLED_ID", "LINE_NUMBER"):
         v = os.environ.get(key, "").strip()
         if v:
             return v
-    env_path = Path("/etc/buzonera/email.env")
+    env_path = ETC_ROOT / "email.env"
+    if not env_path.is_file():
+        for alt in (Path("/etc/zeromatic/email.env"), Path("/etc/contestador/email.env")):
+            if alt.is_file():
+                env_path = alt
+                break
     if env_path.is_file():
         for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
@@ -887,9 +931,11 @@ def seize_and_play(modem: Modem, caller: str, already_answered: bool = False) ->
         # Beep corto prueba de línea
         modem.cmd("AT+VTS=[933,0,400]", wait=1.5, expect_ok=False)
         modem.play_wav_pcm_u8(GREETING_WAV)
-        modem.beep()
-        modem.cmd("AT+VLS=1", wait=0.8, expect_ok=False)
+        # Preparar codec ANTES del beep y grabar al momento (si no, el usuario
+        # habla ~1–2 s mientras aún mandamos AT y se corta el inicio).
+        modem.cmd("AT+VLS=1", wait=0.5, expect_ok=False)
         modem.cmd("AT+VSM=1,8000,0,0", expect_ok=False)
+        modem.beep()
         stamp = time.strftime("%Y%m%d_%H%M%S")
         wav = INCOMING_DIR / f"msg_{stamp}.wav"
         n = modem.record(wav, max_sec=MAX_RECORD_SEC)
@@ -924,9 +970,12 @@ def main() -> int:
     setup_log()
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
-    # Regenerar locución con el texto actual
-    subprocess.call(["/opt/buzonera/bin/make_greeting_wav.sh"])
+    # Regenerar locución con el texto actual (si el script existe)
+    greet_sh = INSTALL_ROOT / "bin" / "make_greeting_wav.sh"
+    if greet_sh.is_file():
+        subprocess.call([str(greet_sh)])
     ensure_greeting()
+    logging.info("Instalación: %s", INSTALL_ROOT)
     INCOMING_DIR.mkdir(parents=True, exist_ok=True)
 
     modem = Modem(DEVICE, BAUD)

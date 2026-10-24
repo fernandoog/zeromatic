@@ -1,7 +1,7 @@
 #!/bin/bash
 set -eu
-systemctl stop buzonera.service 2>/dev/null || true
-pkill -9 -f buzonera_daemon.py 2>/dev/null || true
+systemctl stop zeromatic.service 2>/dev/null || true
+pkill -9 -f zeromatic_daemon.py 2>/dev/null || true
 sleep 1
 
 echo "=== USB before ==="
@@ -56,7 +56,7 @@ if [[ ! -c /dev/ttyACM0 ]]; then
 fi
 
 # Exit voice stream if stuck, then reset
-/opt/buzonera/venv/bin/python3 - <<'PY'
+/opt/zeromatic/venv/bin/python3 - <<'PY'
 import serial, time
 ser = serial.Serial("/dev/ttyACM0", 115200, timeout=0.2, rtscts=True)
 time.sleep(0.3)
@@ -88,20 +88,20 @@ print("modem command mode OK")
 PY
 
 # Deploy daemon
-if [[ -f /tmp/buzonera_daemon.py ]]; then
-  tr -d '\r' < /tmp/buzonera_daemon.py > /tmp/daemon.lf.py
-  install -m 755 /tmp/daemon.lf.py /opt/buzonera/bin/buzonera_daemon.py
+if [[ -f /tmp/zeromatic_daemon.py ]]; then
+  tr -d '\r' < /tmp/zeromatic_daemon.py > /tmp/daemon.lf.py
+  install -m 755 /tmp/daemon.lf.py /opt/zeromatic/bin/zeromatic_daemon.py
   python3 - <<'PY'
 from pathlib import Path
-p = Path("/opt/buzonera/bin/buzonera_daemon.py")
+p = Path("/opt/zeromatic/bin/zeromatic_daemon.py")
 lines = p.read_text().splitlines(True)
-lines[0] = "#!/opt/buzonera/venv/bin/python3\n"
+lines[0] = "#!/opt/zeromatic/venv/bin/python3\n"
 p.write_text("".join(lines))
 PY
 fi
 
-systemctl start buzonera.service
+systemctl start zeromatic.service
 sleep 6
-systemctl is-active buzonera
-journalctl -u buzonera -n 12 --no-pager
+systemctl is-active zeromatic
+journalctl -u zeromatic -n 12 --no-pager
 fuser -v /dev/ttyACM0 2>&1 || true

@@ -7,7 +7,7 @@ Línea PSTN (RJ11)
        │
   Módem USB Conexant CX93010  ──USB──►  /dev/ttyACM0 (cdc_acm)
        │
-  buzonera_daemon.py  (systemd: buzonera.service)
+  zeromatic_daemon.py  (systemd: zeromatic.service)
        │
        ├─ RING → AT+FCLASS=8 / AT+VLS=1 → contestar
        ├─ Locución greeting.wav via AT+VTX
@@ -25,12 +25,12 @@ Contestador **analógico** (PSTN) con comandos AT V.253. Sin centralita PBX.
 
 | Pieza | Rol |
 |-------|-----|
-| `bin/buzonera_daemon.py` | Escucha RING, contesta, reproduce, graba, recupera módem |
+| `bin/zeromatic_daemon.py` | Escucha RING, contesta, reproduce, graba, recupera módem |
 | `bin/on_message.sh` | Post-proceso de cada mensaje |
 | `bin/transcribe.py` | STT (OpenAI Whisper o Google Web Speech) |
 | `bin/send_mail.py` | SMTP Gmail con adjunto |
-| `systemd/buzonera.service` | Arranque y reinicio |
-| `/etc/buzonera/email.env` | Secretos (no versionado) |
+| `systemd/zeromatic.service` | Arranque y reinicio |
+| `/etc/zeromatic/email.env` | Secretos (no versionado) |
 
 ## Flujo de una llamada entrante
 
@@ -56,4 +56,4 @@ Contestador **analógico** (PSTN) con comandos AT V.253. Sin centralita PBX.
 - El Conexant a veces rechaza `ATA` en modo data; el daemon usa secuencia voz (`FCLASS=8` + `VLS`).
 - Tras VRX el chip puede quedarse tirando PCM: hace falta reopen/reset USB.
 - Caller ID depende de la operadora y del cableado; el Called-ID se configura a mano (`LINE_NUMBER`).
-- Un solo proceso puede abrir el módem: parar `buzonera` antes de diagnósticos manuales.
+- Un solo proceso puede abrir el módem: parar `zeromatic` antes de diagnósticos manuales.

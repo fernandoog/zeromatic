@@ -2,10 +2,10 @@
 # Diagnóstico rápido de tono de línea. Ejecutar con sudo (o usuario en dialout + control del servicio).
 set -euo pipefail
 
-systemctl stop buzonera.service
+systemctl stop zeromatic.service
 sleep 1
 
-/opt/buzonera/venv/bin/python3 - <<'PY'
+/opt/zeromatic/venv/bin/python3 - <<'PY'
 import serial, time
 ser = serial.Serial("/dev/ttyACM0", 115200, timeout=0.25, rtscts=True)
 time.sleep(0.4)
@@ -54,5 +54,5 @@ else:
 ser.close()
 PY
 
-systemctl start buzonera.service
-systemctl is-active buzonera.service
+systemctl start zeromatic.service
+systemctl is-active zeromatic.service

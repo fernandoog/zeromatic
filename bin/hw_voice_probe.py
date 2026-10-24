@@ -34,7 +34,7 @@ def cmd(ser, c, w=4):
 
 
 def main():
-    subprocess.call(["systemctl", "stop", "buzonera.service"])
+    subprocess.call(["systemctl", "stop", "zeromatic.service"])
     time.sleep(2)
     ser = serial.Serial(DEVICE, 115200, timeout=0.3, rtscts=True)
     time.sleep(0.4)
@@ -81,9 +81,9 @@ def main():
         print("DONE")
     finally:
         ser.close()
-        subprocess.call(["systemctl", "start", "buzonera.service"])
+        subprocess.call(["systemctl", "start", "zeromatic.service"])
         time.sleep(1)
-        print("buzonera:", subprocess.getoutput("systemctl is-active buzonera"))
+        print("zeromatic:", subprocess.getoutput("systemctl is-active zeromatic"))
 
 
 if __name__ == "__main__":

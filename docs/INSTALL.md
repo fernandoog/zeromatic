@@ -11,21 +11,21 @@
 
 ```bash
 cd ~
-git clone https://github.com/fernandoog/buzonera.git
-cd buzonera
+git clone https://github.com/fernandoog/zeromatic.git
+cd zeromatic
 sudo apt update
 sudo apt install -y python3-venv python3-pip sox espeak-ng flac ffmpeg \
   python3-serial minicom
 sudo bash bin/install_on_pi.sh "$PWD"
 ```
 
-`install_on_pi.sh` copia binarios a `/opt/buzonera`, crea el venv, instala dependencias Python, configura spool y habilita systemd.
+`install_on_pi.sh` copia binarios a `/opt/zeromatic`, crea el venv, instala dependencias Python, configura spool y habilita systemd.
 
 ## 2. Correo
 
 ```bash
-sudo cp /etc/buzonera/email.env /etc/buzonera/email.env.bak 2>/dev/null || true
-sudo nano /etc/buzonera/email.env
+sudo cp /etc/zeromatic/email.env /etc/zeromatic/email.env.bak 2>/dev/null || true
+sudo nano /etc/zeromatic/email.env
 ```
 
 Necesitas una [contraseña de aplicación de Gmail](https://myaccount.google.com/apppasswords) (cuenta con 2FA).
@@ -33,27 +33,27 @@ Necesitas una [contraseña de aplicación de Gmail](https://myaccount.google.com
 ## 3. Locución y servicio
 
 ```bash
-sudo /opt/buzonera/bin/make_greeting_wav.sh
-sudo systemctl enable --now buzonera
-sudo systemctl status buzonera
-sudo journalctl -u buzonera -f
+sudo /opt/zeromatic/bin/make_greeting_wav.sh
+sudo systemctl enable --now zeromatic
+sudo systemctl status zeromatic
+sudo journalctl -u zeromatic -f
 ```
 
-Para una voz más natural, genera `greeting.wav` en un PC (`bin/make_greeting_kokoro.py` o `bin/make_greeting_edge.ps1`) y cópialo a `/opt/buzonera/media/`.
+Para una voz más natural, genera `greeting.wav` en un PC (`bin/make_greeting_kokoro.py` o `bin/make_greeting_edge.ps1`) y cópialo a `/opt/zeromatic/media/`.
 
 ## 4. Pruebas
 
 ```bash
 # Pipeline sin teléfono
-sudo /opt/buzonera/bin/test_pipeline.sh
+sudo /opt/zeromatic/bin/test_pipeline.sh
 
 # Test completo (opcional: número saliente)
-sudo TEST_PHONE=6XXXXXXXX /opt/buzonera/bin/full_test.sh
+sudo TEST_PHONE=6XXXXXXXX /opt/zeromatic/bin/full_test.sh
 
 # Hardware del módem
-sudo systemctl stop buzonera
-sudo /opt/buzonera/venv/bin/python3 /opt/buzonera/bin/hw_modem_test.py
-sudo systemctl start buzonera
+sudo systemctl stop zeromatic
+sudo /opt/zeromatic/venv/bin/python3 /opt/zeromatic/bin/hw_modem_test.py
+sudo systemctl start zeromatic
 ```
 
 ## Despliegue desde otro PC (opcional)

@@ -54,14 +54,14 @@ def has_nodial(*parts: str) -> bool:
 
 def main() -> int:
     print("======== HARDWARE MODEM TEST ========")
-    subprocess.call(["systemctl", "stop", "buzonera.service"])
+    subprocess.call(["systemctl", "stop", "zeromatic.service"])
     time.sleep(2)
 
     try:
         ser = serial.Serial(DEVICE, BAUD, timeout=0.3, rtscts=True)
     except Exception as e:
         print(f"FAIL open {DEVICE}: {e}")
-        subprocess.call(["systemctl", "start", "buzonera.service"])
+        subprocess.call(["systemctl", "start", "zeromatic.service"])
         return 1
 
     time.sleep(0.5)
@@ -150,9 +150,9 @@ def main() -> int:
             ser.close()
         except Exception:
             pass
-        subprocess.call(["systemctl", "start", "buzonera.service"])
+        subprocess.call(["systemctl", "start", "zeromatic.service"])
         time.sleep(1)
-        print("buzonera:", subprocess.getoutput("systemctl is-active buzonera"))
+        print("zeromatic:", subprocess.getoutput("systemctl is-active zeromatic"))
 
 
 if __name__ == "__main__":

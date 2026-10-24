@@ -1,5 +1,5 @@
 [Unit]
-Description=Buzonera — contestador telefónico automático (módem USB Conexant CX93010)
+Description=Zeromatic — contestador telefónico automático (módem USB Conexant CX93010)
 After=network-online.target
 Wants=network-online.target
 
@@ -13,7 +13,7 @@ Environment=SILENCE_HANG_SEC=2.0
 Environment=SILENCE_RMS_THRESH=10
 Environment=MIN_MESSAGE_SEC=1.0
 ExecStartPre=/bin/sleep 2
-ExecStart=/opt/buzonera/venv/bin/python3 /opt/buzonera/bin/buzonera_daemon.py
+ExecStart=/opt/zeromatic/venv/bin/python3 /opt/zeromatic/bin/zeromatic_daemon.py
 Restart=always
 RestartSec=5
 TimeoutStopSec=15

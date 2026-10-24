@@ -1,9 +1,9 @@
-# Informe: test de hardware del módem USB (Buzonera)
+# Informe: test de hardware del módem USB (Zeromatic)
 
 **Fecha:** 24 de octubre de 2026  
 **Host:** Raspberry Pi Zero W (LAN local)  
 **Kernel:** `6.18.50+rpt-rpi-v6`  
-**Servicio:** `buzonera` (daemon Python)  
+**Servicio:** `zeromatic` (daemon Python)  
 **Objetivo:** verificar el estado físico/lógico del módem, contrastar especificaciones y decidir si conviene comprar otro.
 
 ---
@@ -44,7 +44,7 @@ Nota: el descriptor USB dice CX93010 y el firmware reporta CX93001; es habitual 
 
 ## 3. Metodología del test
 
-1. Parada temporal de `buzonera.service` (el daemon monopoliza `/dev/ttyACM0`).
+1. Parada temporal de `zeromatic.service` (el daemon monopoliza `/dev/ttyACM0`).
 2. Script `bin/hw_modem_test.py`: identificación AT, clases, perfil, tono, off-hook, voz.
 3. Script `bin/hw_voice_probe.py`: capacidades TAM profundas (`+VSM`, `+VLS`, `+VTX`/`+VRX`).
 4. Rearranque del servicio y comprobación de estado activo.
@@ -166,7 +166,7 @@ Los fallos observados en el proyecto (p. ej. `ATA` rechazado, necesidad de `AT+V
 1. **No comprar** otro módem por rendimiento.  
 2. Si se quiere stock de seguridad: StarTech USB56KEMH2 o equivalente **hardware** Conexant (evitar softmodem).  
 3. Mantener el cable RJ11 / filtro ADSL revisados: el síntoma `NO DIALTONE` suele ser de línea, no del USB.  
-4. Para diagnóstico futuro: `sudo /opt/buzonera/venv/bin/python3 /ruta/hw_modem_test.py` (parar buzonera antes).  
+4. Para diagnóstico futuro: `sudo /opt/zeromatic/venv/bin/python3 /ruta/hw_modem_test.py` (parar zeromatic antes).  
 5. No mezclar pruebas manuales (`minicom`, scripts) con el servicio activo: pelean por `ttyACM0`.
 
 ---
@@ -187,11 +187,11 @@ cdc_acm 1-1:1.0: ttyACM0: USB ACM device
 ```bash
 lsusb | grep -i conexant
 ls -l /dev/ttyACM0
-sudo systemctl stop buzonera
-sudo /opt/buzonera/venv/bin/python3 /opt/buzonera/bin/hw_modem_test.py
+sudo systemctl stop zeromatic
+sudo /opt/zeromatic/venv/bin/python3 /opt/zeromatic/bin/hw_modem_test.py
 # o: /tmp/hw_voice_probe.py
-sudo systemctl start buzonera
-sudo systemctl status buzonera
+sudo systemctl start zeromatic
+sudo systemctl status zeromatic
 ```
 
 ### 8.3 Relación con tests previos (mismo día)
@@ -202,4 +202,4 @@ En la sesión de la mañana del 24/10/2026, `full_test.sh` reportó tono de lín
 
 ## 9. Conclusión
 
-El hardware del Buzonera es **apto y suficiente**. El CX93010 cumple las especificaciones necesarias (voz TAM, CDC-ACM, Caller ID, audio full-duplex vía V.253). Sustituirlo por otro USB 56K del mercado actual no aporta mejora técnica; como mucho conviene un **clon StarTech** de reserva (~40 €).
+El hardware del Zeromatic es **apto y suficiente**. El CX93010 cumple las especificaciones necesarias (voz TAM, CDC-ACM, Caller ID, audio full-duplex vía V.253). Sustituirlo por otro USB 56K del mercado actual no aporta mejora técnica; como mucho conviene un **clon StarTech** de reserva (~40 €).

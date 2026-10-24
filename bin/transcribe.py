@@ -19,7 +19,7 @@ def via_openai(path: Path) -> str | None:
     key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not key:
         # cargar desde email.env si existe
-        env = Path("/etc/buzonera/email.env")
+        env = Path("/etc/zeromatic/email.env")
         if env.exists():
             for line in env.read_text(encoding="utf-8").splitlines():
                 line = line.strip()

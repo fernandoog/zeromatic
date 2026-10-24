@@ -1,7 +1,7 @@
 #!/bin/bash
 set -eu
-systemctl stop buzonera.service 2>/dev/null || true
-pkill -9 -f buzonera_daemon.py 2>/dev/null || true
+systemctl stop zeromatic.service 2>/dev/null || true
+pkill -9 -f zeromatic_daemon.py 2>/dev/null || true
 sleep 1
 
 echo "Before:"
@@ -36,7 +36,7 @@ ls -l /dev/ttyACM* 2>/dev/null || echo no-acm
 dmesg | tail -15
 
 if [[ -c /dev/ttyACM0 ]]; then
-  /opt/buzonera/venv/bin/python3 - <<'PY'
+  /opt/zeromatic/venv/bin/python3 - <<'PY'
 import serial, time
 ser = serial.Serial("/dev/ttyACM0", 115200, timeout=0.5, rtscts=True)
 time.sleep(1.5)

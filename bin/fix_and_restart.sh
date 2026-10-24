@@ -1,15 +1,15 @@
 #!/bin/bash
 # Reset duro del módem + redeploy daemon + flac + permisos email.env
 set -euo pipefail
-sed -i 's/\r$//' /tmp/buzonera_daemon.py /tmp/fix_and_restart.sh 2>/dev/null || true
+sed -i 's/\r$//' /tmp/zeromatic_daemon.py /tmp/fix_and_restart.sh 2>/dev/null || true
 
-systemctl stop buzonera.service || true
-pkill -9 -f buzonera_daemon.py 2>/dev/null || true
+systemctl stop zeromatic.service || true
+pkill -9 -f zeromatic_daemon.py 2>/dev/null || true
 sleep 1
 
 # Liberar línea / reset USB ACM
 if [[ -c /dev/ttyACM0 ]]; then
-  /opt/buzonera/venv/bin/python3 - <<'PY'
+  /opt/zeromatic/venv/bin/python3 - <<'PY'
 import serial, time
 try:
     ser = serial.Serial("/dev/ttyACM0", 115200, timeout=0.3, rtscts=True)
@@ -24,21 +24,21 @@ except Exception as e:
 PY
 fi
 
-install -m 755 /tmp/buzonera_daemon.py /opt/buzonera/bin/buzonera_daemon.py
+install -m 755 /tmp/zeromatic_daemon.py /opt/zeromatic/bin/zeromatic_daemon.py
 python3 - <<'PY'
 from pathlib import Path
-p = Path("/opt/buzonera/bin/buzonera_daemon.py")
+p = Path("/opt/zeromatic/bin/zeromatic_daemon.py")
 lines = p.read_text().splitlines(True)
-lines[0] = "#!/opt/buzonera/venv/bin/python3\n"
+lines[0] = "#!/opt/zeromatic/venv/bin/python3\n"
 p.write_text("".join(lines))
 PY
 
 apt-get install -y -qq flac >/dev/null 2>&1 || true
-chmod 640 /etc/buzonera/email.env 2>/dev/null || true
-chown root:root /etc/buzonera/email.env 2>/dev/null || true
+chmod 640 /etc/zeromatic/email.env 2>/dev/null || true
+chown root:root /etc/zeromatic/email.env 2>/dev/null || true
 
-systemctl start buzonera.service
+systemctl start zeromatic.service
 sleep 4
-systemctl is-active buzonera
-journalctl -u buzonera -n 12 --no-pager
+systemctl is-active zeromatic
+journalctl -u zeromatic -n 12 --no-pager
 fuser /dev/ttyACM0 2>&1 || true

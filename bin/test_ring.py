@@ -52,7 +52,7 @@ def cmd(ser, command, wait=3.0):
 
 
 def main():
-    subprocess.call(["systemctl", "stop", "buzonera.service"])
+    subprocess.call(["systemctl", "stop", "zeromatic.service"])
     time.sleep(1.2)
     ser = serial.Serial(DEVICE, 115200, timeout=0.2, rtscts=True)
     time.sleep(0.5)
@@ -104,7 +104,7 @@ def main():
             ser.close()
         except Exception:
             pass
-        subprocess.call(["systemctl", "start", "buzonera.service"])
+        subprocess.call(["systemctl", "start", "zeromatic.service"])
         logging.info("Contestador rearrancado")
 
 
