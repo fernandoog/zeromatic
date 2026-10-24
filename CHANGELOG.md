@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.0 — 2026-10-24
+
+- CLI **`zeromatic <teléfono> <mensaje…>`**: marca, TTS (`espeak-ng`) por la línea y cuelga.
+- Opciones `--dry-run` y `ZEROMATIC_TIMEOUT`; para/rearranca el servicio `zeromatic` automáticamente.
+- Enlace `/usr/local/bin/zeromatic` en `install_on_pi.sh`.
+
 ## 1.2.0 — 2026-10-24
 
 - Nombre del proyecto: **Zeromatic** (Pi **Zero** + **automatic** answering machine).

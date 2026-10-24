@@ -1,0 +1,26 @@
+#!/bin/bash
+# Wrapper: zeromatic <telefono> <mensaje de texto a voz...>
+# Ejemplo: zeromatic 612345678 Hola, te llama Zeromatic
+set -euo pipefail
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  LINK="$(readlink "$SOURCE")"
+  if [[ "$LINK" == /* ]]; then
+    SOURCE="$LINK"
+  else
+    SOURCE="$DIR/$LINK"
+  fi
+done
+HERE="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+ROOT="${ZEROMATIC_ROOT:-/opt/zeromatic}"
+PY="${ROOT}/venv/bin/python3"
+if [[ -f "$HERE/zeromatic_call.py" ]]; then
+  SCRIPT="$HERE/zeromatic_call.py"
+else
+  SCRIPT="${ROOT}/bin/zeromatic_call.py"
+fi
+if [[ ! -x "$PY" ]]; then
+  PY=python3
+fi
+exec "$PY" "$SCRIPT" "$@"

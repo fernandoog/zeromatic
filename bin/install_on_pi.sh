@@ -67,12 +67,23 @@ fi
 install -d -m 755 /opt/zeromatic/media
 
 # Apuntar scripts a venv
-for py in zeromatic_daemon.py transcribe.py send_mail.py test_call.py \
+for py in zeromatic_daemon.py transcribe.py send_mail.py test_call.py zeromatic_call.py \
           diag_line.py diag_quick.py hw_modem_test.py hw_voice_probe.py test_ring.py; do
   if [[ -f /opt/zeromatic/bin/$py ]]; then
     sed -i '1s|.*|#!/opt/zeromatic/venv/bin/python3|' "/opt/zeromatic/bin/$py"
   fi
 done
+
+# CLI: zeromatic <tel> <mensaje TTS...>
+install -m 755 "$SRC/bin/zeromatic" /opt/zeromatic/bin/zeromatic
+ln -sfn /opt/zeromatic/bin/zeromatic /usr/local/bin/zeromatic
+# systemctl sin contraseña para llamadas salientes TTS
+if [[ -n "${SUDO_USER:-}" ]]; then
+  echo "${SUDO_USER} ALL=(root) NOPASSWD: /bin/systemctl stop zeromatic, /bin/systemctl start zeromatic, /bin/systemctl restart zeromatic, /bin/systemctl is-active zeromatic" \
+    >/etc/sudoers.d/zeromatic-call
+  chmod 440 /etc/sudoers.d/zeromatic-call
+  visudo -cf /etc/sudoers.d/zeromatic-call >/dev/null
+fi
 
 # Desactivar getty serial si existe
 systemctl stop serial-getty@ttyACM0.service 2>/dev/null || true

@@ -101,8 +101,8 @@ Copia `media/greeting.wav` a `/opt/zeromatic/media/greeting.wav` en la Pi.
 |--------|----------|
 | `bin/full_test.sh` | Servicio + línea + pipeline + llamada saliente opcional |
 | `bin/test_pipeline.sh` | Audio → MP3 → correo (sin teléfono) |
-| `bin/test_call.py <número>` | Llamada saliente con locución |
-| `bin/hw_modem_test.py` | Test de hardware / AT / tono |
+| `bin/zeromatic <tel> <texto…>` | Llamada saliente con **TTS** (texto → voz) |
+| `bin/test_call.py <número>` | Llamada saliente con locución fija (`greeting.wav`) || `bin/hw_modem_test.py` | Test de hardware / AT / tono |
 | `bin/hw_voice_probe.py` | Capacidades de voz (VSM/VLS/VRX) |
 | `bin/diag_line.py` | Diagnóstico de línea |
 
@@ -112,6 +112,18 @@ sudo systemctl stop zeromatic
 sudo /opt/zeromatic/venv/bin/python3 /opt/zeromatic/bin/test_call.py 6XXXXXXXX
 sudo systemctl start zeromatic
 ```
+
+### Llamada saliente con texto a voz
+
+Con el servicio instalado:
+
+```bash
+zeromatic 612345678 Hola, esto es una prueba de Zeromatic
+zeromatic --dry-run 600000000 Solo genera el WAV, no marca
+```
+
+El comando para el servicio, sintetiza el mensaje (`espeak-ng`), marca en modo voz, reproduce el audio por la línea y cuelga; luego rearranca `zeromatic`.  
+(Equivalente de bajo nivel con la locución fija: `bin/test_call.py`.)
 
 ## Rutas en la Pi
 
@@ -147,7 +159,7 @@ sudo systemctl restart zeromatic
 
 ```
 zeromatic/
-├── bin/                 # daemon, pipeline, tests, diagnóstico, TTS
+├── bin/                 # daemon, pipeline, CLI `zeromatic`, tests, TTS
 ├── docs/                # arquitectura, instalación, hardware
 ├── etc/                 # email.env.example, voice.conf
 ├── media/               # greeting.wav (generado)
