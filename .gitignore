@@ -43,3 +43,7 @@ media/*.mp3
 /tmp/
 .coverage
 htmlcov/
+
+# Local TTS models (large)
+models/
+

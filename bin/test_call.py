@@ -17,7 +17,7 @@ if not NUMBER:
     raise SystemExit("Uso: test_call.py <número>   o   TEST_PHONE=6XXXXXXXX test_call.py")
 DEVICE = "/dev/ttyACM0"
 BAUD = 115200
-GREETING = Path("/opt/contestador/media/greeting.wav")
+GREETING = Path("/opt/buzonera/media/greeting.wav")
 DLE, ETX = 0x10, 0x03
 ANSWER_WAIT = 25  # segundos para que cojas el móvil
 
@@ -114,8 +114,8 @@ def play(ser: serial.Serial, pcm: bytes) -> bool:
 
 
 def main() -> int:
-    logging.info("Parando contestador…")
-    subprocess.call(["systemctl", "stop", "contestador.service"])
+    logging.info("Parando Buzonera…")
+    subprocess.call(["systemctl", "stop", "buzonera.service"])
     time.sleep(1.5)
 
     ser = serial.Serial(DEVICE, BAUD, timeout=0.2, rtscts=True)
@@ -184,7 +184,7 @@ def main() -> int:
             ser.close()
         except Exception:
             pass
-        subprocess.call(["systemctl", "start", "contestador.service"])
+        subprocess.call(["systemctl", "start", "buzonera.service"])
         logging.info("Contestador rearrancado")
 
 

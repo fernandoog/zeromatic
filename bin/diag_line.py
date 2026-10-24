@@ -51,7 +51,7 @@ def cmd(ser: serial.Serial, command: str, wait: float = 3.0) -> str:
 
 
 def main() -> int:
-    subprocess.call(["systemctl", "stop", "contestador.service"])
+    subprocess.call(["systemctl", "stop", "buzonera.service"])
     time.sleep(1.5)
     ser = serial.Serial(DEVICE, BAUD, timeout=0.2, rtscts=True)
     time.sleep(0.5)
@@ -114,7 +114,7 @@ def main() -> int:
             ser.close()
         except Exception:
             pass
-        subprocess.call(["systemctl", "start", "contestador.service"])
+        subprocess.call(["systemctl", "start", "buzonera.service"])
 
 
 if __name__ == "__main__":

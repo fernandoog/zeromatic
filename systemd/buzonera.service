@@ -1,5 +1,5 @@
 [Unit]
-Description=Contestador automático (módem USB Conexant CX93010)
+Description=Buzonera — contestador telefónico automático (módem USB Conexant CX93010)
 After=network-online.target
 Wants=network-online.target
 
@@ -8,9 +8,12 @@ Type=simple
 Environment=MODEM_DEVICE=/dev/ttyACM0
 Environment=MODEM_BAUD=115200
 Environment=RINGS_TO_ANSWER=1
-Environment=MAX_RECORD_SEC=120
+Environment=MAX_RECORD_SEC=90
+Environment=SILENCE_HANG_SEC=2.0
+Environment=SILENCE_RMS_THRESH=10
+Environment=MIN_MESSAGE_SEC=1.0
 ExecStartPre=/bin/sleep 2
-ExecStart=/opt/contestador/venv/bin/python3 /opt/contestador/bin/contestador_daemon.py
+ExecStart=/opt/buzonera/venv/bin/python3 /opt/buzonera/bin/buzonera_daemon.py
 Restart=always
 RestartSec=5
 TimeoutStopSec=15

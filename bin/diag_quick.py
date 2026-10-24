@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import subprocess, time, serial
 
-subprocess.call(["systemctl", "stop", "contestador.service"])
+subprocess.call(["systemctl", "stop", "buzonera.service"])
 time.sleep(1)
 ser = serial.Serial("/dev/ttyACM0", 115200, timeout=0.25, rtscts=True)
 time.sleep(0.4)
@@ -44,4 +44,4 @@ try:
     print("RESULT_DIALTONE_TEST:", "NO_DIALTONE" if "NO DIAL" in (r + r2).upper() else "OTHER")
 finally:
     ser.close()
-    subprocess.call(["systemctl", "start", "contestador.service"])
+    subprocess.call(["systemctl", "start", "buzonera.service"])

@@ -34,7 +34,7 @@ def cmd(ser, c, w=4):
 
 
 def main():
-    subprocess.call(["systemctl", "stop", "contestador.service"])
+    subprocess.call(["systemctl", "stop", "buzonera.service"])
     time.sleep(2)
     ser = serial.Serial(DEVICE, 115200, timeout=0.3, rtscts=True)
     time.sleep(0.4)
@@ -81,9 +81,9 @@ def main():
         print("DONE")
     finally:
         ser.close()
-        subprocess.call(["systemctl", "start", "contestador.service"])
+        subprocess.call(["systemctl", "start", "buzonera.service"])
         time.sleep(1)
-        print("contestador:", subprocess.getoutput("systemctl is-active contestador"))
+        print("buzonera:", subprocess.getoutput("systemctl is-active buzonera"))
 
 
 if __name__ == "__main__":

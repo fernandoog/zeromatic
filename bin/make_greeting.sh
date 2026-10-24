@@ -3,7 +3,7 @@
 set -euo pipefail
 
 MSG_DIR=/var/spool/voice/messages
-TMP=/tmp/contestador_greeting
+TMP=/tmp/buzonera_greeting
 mkdir -p "$MSG_DIR" "$TMP"
 
 TEXT="${1:-Deje su mensaje después de la señal.}"

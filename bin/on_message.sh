@@ -3,9 +3,9 @@
 set -euo pipefail
 
 SRC="${1:-}"
-LOG=/var/log/contestador.log
+LOG=/var/log/buzonera.log
 WORKDIR=/var/spool/voice/processed
-ENV_FILE=/etc/contestador/email.env
+ENV_FILE=/etc/buzonera/email.env
 mkdir -p "$WORKDIR"
 exec >>"$LOG" 2>&1
 
@@ -65,7 +65,7 @@ case "${SRC,,}" in
     cp "$SRC" "$WAV"
     ;;
   *.rmd)
-    if ! rmdtopvf "$SRC" | pvftowav >"$WAV" 2>/tmp/contestador_conv.err; then
+    if ! rmdtopvf "$SRC" | pvftowav >"$WAV" 2>/tmp/buzonera_conv.err; then
       echo "$(ts) WARN rmdtopvf falló"
       cp "$SRC" "$OUTDIR/mensaje.rmd"
     fi
@@ -87,10 +87,10 @@ fi
 # Transcripción
 export CONTESTADOR_WAV="$WAV"
 export CONTESTADOR_TXT="$TXT"
-/opt/contestador/bin/transcribe.py || echo "(sin transcripción)" >"$TXT"
+/opt/buzonera/bin/transcribe.py || echo "(sin transcripción)" >"$TXT"
 
 # Envío de correo
-/opt/contestador/bin/send_mail.py \
+/opt/buzonera/bin/send_mail.py \
   --meta "$META" \
   --transcript "$TXT" \
   --audio "${MP3:-$WAV}" \

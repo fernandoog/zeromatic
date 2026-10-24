@@ -1,8 +1,8 @@
-# Contestador Asterix
+# Buzonera
 
 Contestador telefónico automático para **Raspberry Pi** + **módem USB Conexant CX93010**.
 
-Daemon Python ligero (**sin Asterisk**): contesta la línea analógica, reproduce una locución, graba el mensaje, lo transcribe y lo envía por correo.
+Daemon Python ligero: contesta la línea analógica, reproduce una locución, graba el mensaje, lo transcribe y lo envía por correo.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -10,9 +10,11 @@ Daemon Python ligero (**sin Asterisk**): contesta la línea analógica, reproduc
 
 - Contesta al N-ésimo timbre (`RINGS_TO_ANSWER`)
 - Locución + beep + grabación (V.253: `AT+VTX` / `AT+VRX`)
+- Detección rápida de colgado (silencio / tono / DLE) y recorte de cola
+- Recuperación del módem tras cada llamada (evita quedar sordo al siguiente RING)
 - Transcripción en español (OpenAI Whisper o Google Web Speech)
 - Correo con audio (MP3/WAV) + texto vía Gmail SMTP
-- Diagnóstico de línea y test de hardware del módem
+- Locución opcional con **Kokoro** / Edge Neural TTS (generada en el PC)
 - Unidad `systemd` con reinicio automático
 
 ## Hardware
@@ -28,12 +30,12 @@ Detalle y resultado del test de hardware: [docs/HARDWARE.md](docs/HARDWARE.md) �
 ## Instalación rápida
 
 ```bash
-git clone https://github.com/fernandoog/contestador.git
-cd contestador
+git clone https://github.com/fernandoog/buzonera.git
+cd buzonera
 sudo apt install -y python3-venv sox espeak-ng flac ffmpeg
 sudo bash bin/install_on_pi.sh "$PWD"
-sudo nano /etc/contestador/email.env   # App Password de Gmail
-sudo systemctl enable --now contestador
+sudo nano /etc/buzonera/email.env   # App Password de Gmail
+sudo systemctl enable --now buzonera
 ```
 
 Guía completa: [docs/INSTALL.md](docs/INSTALL.md).
@@ -43,13 +45,13 @@ Guía completa: [docs/INSTALL.md](docs/INSTALL.md).
 Con el servicio activo no hay que hacer nada:
 
 1. Llamada entrante → contesta
-2. «Deje su mensaje después de la señal» + beep
-3. Graba hasta silencio o ~120 s
-4. Transcribe y envía correo
+2. Locución de bienvenida + beep
+3. Graba hasta silencio o `MAX_RECORD_SEC`
+4. Transcribe y envía correo (en segundo plano)
 
 ```bash
-sudo systemctl status contestador
-sudo journalctl -u contestador -f
+sudo systemctl status buzonera
+sudo journalctl -u buzonera -f
 ```
 
 **Importante:** si usas el módem a mano (`test_call.py`, `hw_modem_test.py`, `minicom`), para el servicio antes; si no, pelean por `/dev/ttyACM0`.
@@ -57,7 +59,7 @@ sudo journalctl -u contestador -f
 ## Configuración de correo
 
 1. Crea una [contraseña de aplicación](https://myaccount.google.com/apppasswords) (Gmail + 2FA).
-2. Edita `/etc/contestador/email.env` (plantilla: `etc/email.env.example`).
+2. Edita `/etc/buzonera/email.env` (plantilla: `etc/email.env.example`).
 
 ```bash
 MAIL_TO=tu@email.com
@@ -72,9 +74,23 @@ LINE_NUMBER=912345678
 Prueba sin llamada real:
 
 ```bash
-sudo /opt/contestador/bin/test_pipeline.sh
-tail -50 /var/log/contestador.log
+sudo /opt/buzonera/bin/test_pipeline.sh
+tail -50 /var/log/buzonera.log
 ```
+
+## Locución (voz)
+
+En la Pi, por defecto `espeak-ng` si no hay WAV. Para una voz más natural, genera en el PC:
+
+```powershell
+# Kokoro-82M (recomendado) — requiere models/kokoro/*.onnx
+python bin/make_greeting_kokoro.py --voice ef_dora
+
+# O Edge Neural TTS
+.\bin\make_greeting_edge.ps1
+```
+
+Copia `media/greeting.wav` a `/opt/buzonera/media/greeting.wav` en la Pi.
 
 ## Pruebas
 
@@ -88,51 +104,52 @@ tail -50 /var/log/contestador.log
 | `bin/diag_line.py` | Diagnóstico de línea |
 
 ```bash
-sudo TEST_PHONE=6XXXXXXXX /opt/contestador/bin/full_test.sh
-sudo systemctl stop contestador
-sudo /opt/contestador/venv/bin/python3 /opt/contestador/bin/test_call.py 6XXXXXXXX
-sudo systemctl start contestador
+sudo TEST_PHONE=6XXXXXXXX /opt/buzonera/bin/full_test.sh
+sudo systemctl stop buzonera
+sudo /opt/buzonera/venv/bin/python3 /opt/buzonera/bin/test_call.py 6XXXXXXXX
+sudo systemctl start buzonera
 ```
 
 ## Rutas en la Pi
 
 | Qué | Ruta |
 |-----|------|
-| Binarios | `/opt/contestador/bin/` |
-| Locución | `/opt/contestador/media/greeting.wav` |
-| Config correo | `/etc/contestador/email.env` |
+| Binarios | `/opt/buzonera/bin/` |
+| Locución | `/opt/buzonera/media/greeting.wav` |
+| Config correo | `/etc/buzonera/email.env` |
 | Entrantes | `/var/spool/voice/incoming/` |
 | Procesados | `/var/spool/voice/processed/` |
-| Log pipeline | `/var/log/contestador.log` |
-| Log daemon | `journalctl -u contestador` |
-| systemd | `/etc/systemd/system/contestador.service` |
+| Log pipeline | `/var/log/buzonera.log` |
+| Log daemon | `journalctl -u buzonera` |
+| systemd | `/etc/systemd/system/buzonera.service` |
 
 ## Variables del servicio
 
-En `systemd/contestador.service` (o override):
+En `systemd/buzonera.service` (o override):
 
 | Variable | Default | Significado |
 |----------|---------|-------------|
 | `RINGS_TO_ANSWER` | `1` | Timbres antes de contestar |
-| `MAX_RECORD_SEC` | `120` | Máximo de grabación |
+| `MAX_RECORD_SEC` | `90` | Máximo de grabación |
+| `SILENCE_HANG_SEC` | `2.0` | Silencio para cortar |
 | `MODEM_DEVICE` | `/dev/ttyACM0` | Puerto del módem |
 | `MODEM_BAUD` | `115200` | Velocidad serie |
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl restart contestador
+sudo systemctl restart buzonera
 ```
 
 ## Estructura del repositorio
 
 ```
-contestador/
-├── bin/                 # daemon, pipeline, tests, diagnóstico
+buzonera/
+├── bin/                 # daemon, pipeline, tests, diagnóstico, TTS
 ├── docs/                # arquitectura, instalación, hardware
 ├── etc/                 # email.env.example, voice.conf
-├── media/               # greeting.wav (generado en la Pi)
+├── media/               # greeting.wav (generado)
 ├── scripts/             # despliegue desde PC
-├── systemd/             # contestador.service
+├── systemd/             # buzonera.service
 ├── INFORME-hardware-modem-2026-10-24.md
 ├── requirements.txt
 └── README.md
@@ -144,11 +161,12 @@ Arquitectura: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 | Síntoma | Qué mirar |
 |---------|-----------|
-| No contesta | `systemctl status contestador` · ¿otro proceso en el módem? |
+| No contesta | `systemctl status buzonera` · ¿otro proceso en el módem? |
+| Segunda llamada no contesta | Recover post-llamada; `journalctl -u buzonera` |
 | `NO DIALTONE` | Cable RJ11 / filtro ADSL / centralita |
-| Correo no llega | `GMAIL_APP_PASSWORD` · `/var/log/contestador.log` |
+| Correo no llega | `GMAIL_APP_PASSWORD` · `/var/log/buzonera.log` |
 | Sin transcripción | `sudo apt install flac` o `OPENAI_API_KEY` |
-| Tras reinicio no arranca | `sudo systemctl enable --now contestador` |
+| Tras reinicio no arranca | `sudo systemctl enable --now buzonera` |
 
 ## Licencia
 
