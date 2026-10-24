@@ -2,6 +2,8 @@
 
 **Zero** (Raspberry Pi Zero) + **automatic** answering machine.
 
+Repo: [github.com/fernandoog/contestador](https://github.com/fernandoog/contestador)
+
 Contestador telefónico automático para **Raspberry Pi Zero** + **módem USB Conexant CX93010**.
 
 Daemon Python ligero: contesta la línea analógica, reproduce una locución, graba el mensaje, lo transcribe y lo envía por correo.
@@ -33,8 +35,8 @@ Detalle y resultado del test de hardware: [docs/HARDWARE.md](docs/HARDWARE.md) �
 ## Instalación rápida
 
 ```bash
-git clone https://github.com/fernandoog/zeromatic.git
-cd zeromatic
+git clone https://github.com/fernandoog/contestador.git
+cd contestador
 sudo apt install -y python3-venv sox espeak-ng flac ffmpeg
 sudo bash bin/install_on_pi.sh "$PWD"
 sudo nano /etc/zeromatic/email.env   # App Password de Gmail

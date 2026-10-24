@@ -11,8 +11,8 @@
 
 ```bash
 cd ~
-git clone https://github.com/fernandoog/zeromatic.git
-cd zeromatic
+git clone https://github.com/fernandoog/contestador.git
+cd contestador
 sudo apt update
 sudo apt install -y python3-venv python3-pip sox espeak-ng flac ffmpeg \
   python3-serial minicom
