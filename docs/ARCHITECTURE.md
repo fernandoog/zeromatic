@@ -3,23 +3,23 @@
 ## Visión general
 
 ```
-Línea PSTN (RJ11)
+SIM GSM
        │
-  Módem USB Conexant CX93010  ──USB──►  /dev/ttyACM0 (cdc_acm)
+  SIM800C ──UART/CH340──►  /dev/ttyUSB0
        │
-  zeromatic_daemon.py  (systemd: zeromatic.service)
+  zeromatic_daemon.py  (systemd: zeromatic.service, MODEM_TYPE=gsm)
        │
-       ├─ RING → AT+FCLASS=8 / AT+VLS=1 → contestar
-       ├─ Locución greeting.wav via AT+VTX
-       ├─ Grabación AT+VRX → WAV 8 kHz PCM
-       ├─ Colgado → force_recover (vuelta a data mode)
+       ├─ RING / +CLIP → ATA
+       ├─ Locución via AT+CREC (WAV en FAT C:\User\greeting.wav)
+       ├─ Grabación AT+CREC → descarga hex → WAV
+       ├─ ATH → force_recover
        └─ on_message.sh (async)
               ├─ sox → MP3
               ├─ transcribe.py (Whisper o Google STT)
               └─ send_mail.py → Gmail SMTP
 ```
 
-Contestador **analógico** (PSTN) con comandos AT V.253. Sin centralita PBX.
+Contestador **GSM** (SIM800C). El modo legado Conexant/V.253 sigue disponible con `MODEM_TYPE=conexant`.
 
 ## Componentes
 

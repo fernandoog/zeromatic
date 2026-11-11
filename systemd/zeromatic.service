@@ -1,18 +1,21 @@
 [Unit]
-Description=Zeromatic — contestador telefónico automático (módem USB Conexant CX93010)
+Description=Zeromatic — contestador telefónico automático (SIM800 GSM / Conexant)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-Environment=MODEM_DEVICE=/dev/ttyACM0
+Environment=MODEM_TYPE=gsm
+Environment=MODEM_DEVICE=/dev/ttyUSB0
 Environment=MODEM_BAUD=115200
-Environment=RINGS_TO_ANSWER=1
-Environment=MAX_RECORD_SEC=90
-Environment=SILENCE_HANG_SEC=2.0
-Environment=SILENCE_RMS_THRESH=10
-Environment=MIN_MESSAGE_SEC=1.0
-ExecStartPre=/bin/sleep 2
+Environment=SIM_PIN=4912
+Environment=DISABLE_SIM_PIN=1
+Environment=RINGS_TO_ANSWER=2
+Environment=MAX_RECORD_SEC=59
+Environment=SILENCE_HANG_SEC=5.0
+Environment=SILENCE_RMS_THRESH=8
+Environment=MIN_MESSAGE_SEC=3.0
+ExecStartPre=/bin/sleep 3
 ExecStart=/opt/zeromatic/venv/bin/python3 /opt/zeromatic/bin/zeromatic_daemon.py
 Restart=always
 RestartSec=5

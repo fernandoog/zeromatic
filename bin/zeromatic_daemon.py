@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
-Zeromatic — contestador telefónico para módem Conexant CX930xx (V.253).
-Responde, reproduce locución, graba y dispara el pipeline de correo.
+Zeromatic — contestador telefónico.
+
+Soporta:
+  - GSM SIM800C (USB-UART, p. ej. /dev/ttyUSB0) vía AT+CREC
+  - Conexant CX930xx (V.253, /dev/ttyACM0) legado
+
+Modo: MODEM_TYPE=gsm|conexant|auto (por defecto auto).
 """
 from __future__ import annotations
 
@@ -37,7 +42,14 @@ def _detect_etc() -> Path:
 
 ETC_ROOT = _detect_etc()
 
-DEVICE = os.environ.get("MODEM_DEVICE", "/dev/ttyACM0")
+
+def _default_device() -> str:
+    if Path("/dev/ttyUSB0").exists():
+        return "/dev/ttyUSB0"
+    return "/dev/ttyACM0"
+
+
+DEVICE = os.environ.get("MODEM_DEVICE", _default_device())
 BAUD = int(os.environ.get("MODEM_BAUD", "115200"))
 RINGS_TO_ANSWER = int(os.environ.get("RINGS_TO_ANSWER", "1"))
 MAX_RECORD_SEC = int(os.environ.get("MAX_RECORD_SEC", "90"))
@@ -57,6 +69,24 @@ LOG_PATH = Path(
         os.environ.get("BUZONERA_LOG", os.environ.get("CONTESTADOR_LOG", _log_default)),
     )
 )
+
+
+def resolve_modem_type() -> str:
+    """gsm | conexant."""
+    raw = os.environ.get("MODEM_TYPE", "auto").strip().lower()
+    if raw in {"gsm", "sim800", "sim800c"}:
+        return "gsm"
+    if raw in {"conexant", "pstn", "v253", "cx93010"}:
+        return "conexant"
+    # auto
+    if "ttyUSB" in DEVICE or "ch341" in DEVICE.lower():
+        return "gsm"
+    if Path("/dev/ttyUSB0").exists() and not Path("/dev/ttyACM0").exists():
+        return "gsm"
+    return "conexant"
+
+
+MODEM_TYPE = resolve_modem_type()
 
 DLE = 0x10
 ETX = 0x03
@@ -911,7 +941,7 @@ def process_message(wav: Path, caller: str) -> None:
 
 
 def seize_and_play(modem: Modem, caller: str, already_answered: bool = False) -> None:
-    """Descolgar al instante, locución y grabar."""
+    """Descolgar al instante, locución y grabar (Conexant V.253)."""
     logging.info("Atendiendo YA (caller=%s)", caller or "?")
     # Tirar basura pero NO esperar — el timbre sigue sonando
     try:
@@ -966,23 +996,129 @@ def seize_and_play(modem: Modem, caller: str, already_answered: bool = False) ->
         logging.info("Listo para siguiente llamada")
 
 
-def main() -> int:
-    setup_log()
-    signal.signal(signal.SIGTERM, handle_signal)
-    signal.signal(signal.SIGINT, handle_signal)
-    # Regenerar locución con el texto actual (si el script existe)
-    greet_sh = INSTALL_ROOT / "bin" / "make_greeting_wav.sh"
-    if greet_sh.is_file():
-        subprocess.call([str(greet_sh)])
+def seize_and_play_gsm(modem, caller: str) -> None:
+    """Contestador SIM800: ATA → CREC play greeting → CREC record → download."""
+    from modem_gsm import GREETING_REMOTE, RECORD_ID  # noqa: WPS433
+
+    logging.info("Atendiendo GSM (caller=%s)", caller or "?")
+    try:
+        try:
+            modem.ser.reset_input_buffer()
+        except Exception:
+            pass
+        modem.answer_now()
+        time.sleep(0.5)
+        try:
+            modem.play_remote(GREETING_REMOTE, volume=90)
+        except Exception:
+            logging.exception("Play greeting falló")
+            modem.beep_dtmf()
+        modem.beep_dtmf()
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        wav = INCOMING_DIR / f"msg_{stamp}.wav"
+        size = modem.record_to_id(RECORD_ID, max_sec=MAX_RECORD_SEC)
+        modem.hangup()
+        n = 0
+        if size > 100:
+            n = modem.download_record(RECORD_ID, wav, total=size)
+        modem.force_recover()
+        if n > 1000:
+            logging.info("Mensaje GSM guardado %s (%d bytes)", wav, n)
+            process_message(wav, caller)
+        else:
+            logging.warning("Grabación GSM corta/vacía (%d) — sin pipeline", n)
+            try:
+                wav.unlink(missing_ok=True)
+            except Exception:
+                pass
+        logging.info("Listo para siguiente llamada (GSM)")
+    except Exception:
+        logging.exception("Error en llamada GSM")
+        try:
+            modem.hangup()
+        except Exception:
+            pass
+        try:
+            modem.force_recover()
+        except Exception:
+            logging.exception("Recover GSM falló")
+
+
+def main_gsm() -> int:
+    from modem_gsm import GREETING_REMOTE, GsmModem, parse_clip  # noqa: WPS433
+
     ensure_greeting()
-    logging.info("Instalación: %s", INSTALL_ROOT)
+    logging.info("Instalación: %s (MODEM_TYPE=gsm device=%s)", INSTALL_ROOT, DEVICE)
+    INCOMING_DIR.mkdir(parents=True, exist_ok=True)
+
+    modem = GsmModem(DEVICE, BAUD)
+    try:
+        modem.init()
+        # Subir locución a la FAT del módulo (idempotente)
+        try:
+            modem.upload_wav(GREETING_WAV, GREETING_REMOTE)
+        except Exception:
+            logging.exception(
+                "No se pudo subir greeting a SIM800 (%s) — usaré DTMF",
+                GREETING_REMOTE,
+            )
+        caller = ""
+        rings = 0
+        logging.info(
+            "Esperando llamadas GSM (contesta al RING %d; CLIP entre timbres)…",
+            RINGS_TO_ANSWER,
+        )
+        while running:
+            etype, text = modem.read_event(timeout=1.0)
+            if not etype:
+                continue
+            if etype == "ring":
+                rings += 1
+                logging.info(
+                    "RING %d/%d (%s) caller=%s",
+                    rings,
+                    RINGS_TO_ANSWER,
+                    text,
+                    caller or "?",
+                )
+                if rings >= max(1, RINGS_TO_ANSWER):
+                    seize_and_play_gsm(modem, caller)
+                    caller = ""
+                    rings = 0
+                continue
+            if etype == "line":
+                u = text.upper()
+                if u.startswith("+CLIP:"):
+                    caller = parse_clip(text) or caller
+                    logging.info("Caller-ID (CLIP): %s", caller or "?")
+                elif "NO CARRIER" in u:
+                    logging.info("NO CARRIER (idle)")
+                    rings = 0
+                elif u not in {"OK"}:
+                    logging.info("Modem: %s", text[:100])
+    finally:
+        try:
+            modem.hangup()
+        except Exception:
+            pass
+        modem.close()
+    return 0
+
+
+def main_conexant() -> int:
+    ensure_greeting()
+    logging.info("Instalación: %s (MODEM_TYPE=conexant device=%s)", INSTALL_ROOT, DEVICE)
     INCOMING_DIR.mkdir(parents=True, exist_ok=True)
 
     modem = Modem(DEVICE, BAUD)
     try:
         modem.init()
         caller = ""
-        logging.info("Esperando llamadas (contesta al primer RING)…")
+        rings = 0
+        logging.info(
+            "Esperando llamadas (contesta al RING %d; Caller-ID entre timbres)…",
+            RINGS_TO_ANSWER,
+        )
         noise_hits = 0
         while running:
             etype, text = modem.read_event(timeout=1.0)
@@ -993,17 +1129,27 @@ def main() -> int:
             if etype == "vcon" or (
                 etype == "line" and ("VCON" in text.upper() or text.upper().startswith("CONNECT"))
             ):
-                logging.info("VCON → locución")
+                logging.info("VCON → locución (caller=%s)", caller or "?")
                 seize_and_play(modem, caller, already_answered=True)
                 caller = ""
+                rings = 0
                 noise_hits = 0
                 continue
 
             if etype == "ring" or (etype == "line" and "RING" in text.upper()):
-                logging.info("RING detectado (%s) → descolgar YA", text or etype)
-                # No esperar CID: hay que enganchar en este pulso de timbre
-                seize_and_play(modem, caller, already_answered=False)
-                caller = ""
+                rings += 1
+                logging.info(
+                    "RING %d/%d (%s) caller=%s",
+                    rings,
+                    RINGS_TO_ANSWER,
+                    text or etype,
+                    caller or "?",
+                )
+                # En España el CLIP suele llegar entre el 1.º y el 2.º timbre.
+                if rings >= max(1, RINGS_TO_ANSWER):
+                    seize_and_play(modem, caller, already_answered=False)
+                    caller = ""
+                    rings = 0
                 noise_hits = 0
                 continue
 
@@ -1017,19 +1163,38 @@ def main() -> int:
                         logging.warning("Puerto con PCM residual — force_recover")
                         modem.force_recover()
                         noise_hits = 0
+                        rings = 0
                     continue
                 noise_hits = 0
                 if "NMBR" in u and "=" in text:
                     caller = text.split("=", 1)[1].strip()
                     logging.info("Caller-ID: %s", caller)
-                elif u not in {"OK"} and not any(
-                    u.startswith(p) for p in ("DATE", "TIME", "NAME")
-                ):
+                elif u.startswith("DATE=") or u.startswith("TIME=") or u.startswith("NAME="):
+                    logging.info("CID: %s", text.strip()[:80])
+                elif u not in {"OK"}:
                     logging.info("Modem: %s", text[:80])
     finally:
         modem.hangup()
         modem.close()
     return 0
+
+
+def main() -> int:
+    setup_log()
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+    # Regenerar locución con el texto actual (si el script existe)
+    greet_sh = INSTALL_ROOT / "bin" / "make_greeting_wav.sh"
+    if greet_sh.is_file():
+        subprocess.call([str(greet_sh)])
+    logging.info("MODEM_TYPE efectivo: %s", MODEM_TYPE)
+    if MODEM_TYPE == "gsm":
+        # Asegurar import desde /opt/zeromatic/bin
+        bin_dir = str(INSTALL_ROOT / "bin")
+        if bin_dir not in sys.path:
+            sys.path.insert(0, bin_dir)
+        return main_gsm()
+    return main_conexant()
 
 
 if __name__ == "__main__":

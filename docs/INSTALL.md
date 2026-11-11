@@ -5,7 +5,7 @@
 - Raspberry Pi OS (Bookworm u similar) con red
 - Módem USB Conexant CX93010 conectado
 - Cable RJ11 a línea analógica
-- Usuario con `sudo` (p. ej. `pi`)
+- Usuario con `sudo` (p. ej. `zeromatic`)
 
 ## 1. Clonar e instalar
 
@@ -61,7 +61,7 @@ sudo systemctl start zeromatic
 Desde Windows (PowerShell), con SSH configurado:
 
 ```powershell
-.\scripts\deploy_from_pc.ps1 -HostName 192.168.1.23 -User pi
+.\scripts\deploy_from_pc.ps1 -HostName 192.168.1.23 -User zeromatic
 ```
 
-Ajusta host, usuario y clave SSH según tu entorno.
+Ajusta host, usuario y clave SSH según tu entorno (por defecto usa la clave en `Servidores\Zeromatic\zeromatic`).

@@ -2,11 +2,12 @@
 # Ejecutar en la Pi como root (o con sudo)
 set -euo pipefail
 
-SRC="${1:-/home/pi/zeromatic}"
+SRC="${1:-/home/zeromatic/zeromatic}"
 if [[ ! -d "$SRC/bin" ]]; then
   echo "No encuentro $SRC/bin"
   exit 1
 fi
+
 
 install -d -m 755 /opt/zeromatic/bin /opt/zeromatic/media /etc/zeromatic \
   /var/spool/voice/incoming /var/spool/voice/messages /var/spool/voice/processed
@@ -25,7 +26,7 @@ fi
 
 # Grupo voice + permisos
 getent group voice >/dev/null || groupadd voice
-usermod -aG voice,dialout "${SUDO_USER:-pi}" || true
+usermod -aG voice,dialout "${SUDO_USER:-zeromatic}" || true
 chown -R root:voice /var/spool/voice
 chmod 775 /var/spool/voice/incoming /var/spool/voice/messages /var/spool/voice/processed
 touch /var/log/zeromatic.log
@@ -68,6 +69,7 @@ install -d -m 755 /opt/zeromatic/media
 
 # Apuntar scripts a venv
 for py in zeromatic_daemon.py transcribe.py send_mail.py test_call.py zeromatic_call.py \
+          modem_gsm.py gsm_setup_sim.py \
           diag_line.py diag_quick.py hw_modem_test.py hw_voice_probe.py test_ring.py; do
   if [[ -f /opt/zeromatic/bin/$py ]]; then
     sed -i '1s|.*|#!/opt/zeromatic/venv/bin/python3|' "/opt/zeromatic/bin/$py"
@@ -85,9 +87,14 @@ if [[ -n "${SUDO_USER:-}" ]]; then
   visudo -cf /etc/sudoers.d/zeromatic-call >/dev/null
 fi
 
-# Desactivar getty serial si existe
+# Desactivar getty serial si existe (ACM legado o USB-UART)
 systemctl stop serial-getty@ttyACM0.service 2>/dev/null || true
 systemctl disable serial-getty@ttyACM0.service 2>/dev/null || true
+systemctl stop serial-getty@ttyUSB0.service 2>/dev/null || true
+systemctl disable serial-getty@ttyUSB0.service 2>/dev/null || true
+
+# Asegurar dialout para el usuario de servicio
+usermod -aG dialout "${SUDO_USER:-zeromatic}" || true
 
 systemctl daemon-reload
 systemctl enable zeromatic.service

@@ -61,7 +61,15 @@ def main() -> int:
         return raw.strip()
 
     caller = pretty_caller(meta_field("caller-id", "desconocido"))
-    called = meta_field("called-id", "") or cfg.get("LINE_NUMBER", "") or cfg.get("CALLED_ID", "") or "no configurado"
+    called_raw = meta_field("called-id", "")
+    if called_raw.lower() in {"", "no configurado", "desconocido", "(vacío)", "(vacio)"}:
+        called_raw = ""
+    called = (
+        called_raw
+        or cfg.get("LINE_NUMBER", "").strip()
+        or cfg.get("CALLED_ID", "").strip()
+        or "no configurado"
+    )
 
     msg = EmailMessage()
     msg["Subject"] = f"[Zeromatic] Mensaje de {caller}"

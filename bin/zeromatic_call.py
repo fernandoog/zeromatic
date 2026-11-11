@@ -25,11 +25,34 @@ from pathlib import Path
 
 import serial
 
-DEVICE = os.environ.get("MODEM_DEVICE", "/dev/ttyACM0")
+def _default_device() -> str:
+    if Path("/dev/ttyUSB0").exists():
+        return "/dev/ttyUSB0"
+    return "/dev/ttyACM0"
+
+
+def _resolve_modem_type() -> str:
+    raw = os.environ.get("MODEM_TYPE", "auto").strip().lower()
+    if raw in {"gsm", "sim800", "sim800c"}:
+        return "gsm"
+    if raw in {"conexant", "pstn", "v253", "cx93010"}:
+        return "conexant"
+    if "ttyUSB" in os.environ.get("MODEM_DEVICE", _default_device()):
+        return "gsm"
+    if Path("/dev/ttyUSB0").exists() and not Path("/dev/ttyACM0").exists():
+        return "gsm"
+    return "conexant"
+
+
+DEVICE = os.environ.get("MODEM_DEVICE", _default_device())
 BAUD = int(os.environ.get("MODEM_BAUD", "115200"))
+MODEM_TYPE = _resolve_modem_type()
 TIMEOUT = float(os.environ.get("ZEROMATIC_TIMEOUT", "60"))
-# Segundos tras OK de marcaciÃ³n antes de hablar (timbre + descolgar)
-ANSWER_WAIT = float(os.environ.get("ZEROMATIC_ANSWER_WAIT", "18"))
+# Segundos tras OK de marcación antes de hablar (timbre + descolgar)
+ANSWER_WAIT = float(os.environ.get("ZEROMATIC_ANSWER_WAIT", "22"))
+# Prefijo de salida (p. ej. "0," en centralitas). En Livebox/Vodafone el "0"
+# llama al buzón 062 — por defecto vacío.
+DIAL_PREFIX = os.environ.get("ZEROMATIC_DIAL_PREFIX", "")
 SERVICE = os.environ.get("ZEROMATIC_SERVICE", "zeromatic")
 TMP_DIR = Path(os.environ.get("ZEROMATIC_TMP", "/tmp/zeromatic"))
 _default_log = Path.home() / ".local" / "log" / "zeromatic_call.log"
@@ -264,7 +287,7 @@ class Modem:
         return text
 
     def init_voice(self) -> None:
-        """Voz limpia: colgado â†’ FCLASS=8. NO descolgar con VLS antes de marcar."""
+        """Voz limpia: colgado → FCLASS=8, listo para descolgar con VLS."""
         self.write(b"\r")
         time.sleep(0.2)
         self.drain(0.3)
@@ -279,78 +302,83 @@ class Modem:
         self.cmd("ATZ", wait=3.0)
         self.cmd("ATE0", wait=1.5)
         self.cmd("ATQ0V1", wait=1.5)
-        # X4: tono de marcado + ocupado (si no hay tono â†’ NO DIALTONE)
-        self.cmd("ATX4", wait=1.5)
+        # X0: marcación a ciegas. En esta línea no hay tono clásico (ATDTW vacío /
+        # VoIP-ATA) y X4 hacía que el módem inventara BUSY (DLE-b) sin sonar el móvil.
+        self.cmd("ATX0", wait=1.5)
         self.cmd("AT+FCLASS=8", wait=2.0)
         self.cmd("AT+VIP", wait=2.0)
         self.cmd("ATS0=0", wait=1.5)
+        self.cmd("ATS6=2", wait=1.5)  # pausa antes de digitos
         self.cmd("ATS7=55", wait=1.5)
         self.cmd("AT+VNH=1", wait=1.5)  # no cuelgues solo al salir de VTX
 
     def dial_voice(self, number: str, timeout: float) -> bool:
-        """Marca en tono esperando dialtone (W). El ; vuelve a comando en voz."""
-        # T=tono, W=esperar tono de lÃ­nea antes de digitos
-        # Tono + dÃ­gitos; sin W (en esta lÃ­nea el W a veces acorta el dial)
-        dial = f"ATDT{number};"
+        """Descolgar (VLS=1) y marcar en tono; el ; vuelve a comando en voz."""
+        # Conexant: hay que seleccionar la línea ANTES de ATD (como test_call.py).
+        logging.info("Descolgando línea (AT+VLS=1)…")
+        r_hook = self.cmd("AT+VLS=1", wait=3.0)
+        if "ERROR" in r_hook.upper():
+            logging.warning("VLS=1 falló (%r) — pruebo VLS=5", r_hook[:60])
+            self.cmd("AT+VLS=5", wait=3.0)
+        # Pausa tras descolgar (línea VoIP/ATA sin tono clásico)
+        time.sleep(2.0)
+        # ATX0 + ';' : marca a ciegas y vuelve a comando voz. Prefijo 0, = salida.
+        prefix = DIAL_PREFIX
+        dial = f"ATDT{prefix}{number};"
         self.drain(0.2)
-        logging.info("Marcando %s (ATDTâ€¦;) â€¦", number)
+        logging.info(
+            "Marcando %s%s (ATX0 ATDT…;) — el móvil debe sonar …",
+            prefix,
+            number,
+        )
+        t0 = time.time()
         self.write((dial + "\r").encode("ascii"))
-        end = time.time() + timeout
+        end = time.time() + min(timeout, 45.0)
         buf = bytearray()
         while time.time() < end:
             chunk = self.ser.read(256)
             if chunk:
                 buf.extend(chunk)
-                # Log eventos DLE (progreso de llamada)
                 if DLE in chunk:
                     logging.info("DLE durante marca: %r", chunk[:40])
                 u = bytes(buf).upper()
-                if b"BUSY" in u:
-                    logging.error("Ocupado")
-                    return False
                 if b"NO DIALTONE" in u or b"NO DIAL TONE" in u:
-                    logging.error("Sin tono de marcaciÃ³n â€” Â¿lÃ­nea/VoIP?")
+                    logging.error("Sin tono de marcación — cable en puerto LINE")
                     return False
-                if b"NO ANSWER" in u:
-                    logging.error("No contestan")
+                if b"BUSY" in u and b"OK" not in u:
+                    logging.error("Ocupado (%r)", bytes(buf)[:80])
                     return False
-                if b"NO CARRIER" in u:
-                    logging.error("No carrier / colgaron")
-                    return False
-                if b"VCON" in u or b"CONNECT" in u or (
-                    b"OK" in u and b"ERROR" not in u and len(buf) > 2
-                ):
-                    logging.info("DÃ­gitos marcados OK (%r)", bytes(buf)[:100])
-                    # Ahora sÃ­: DCE a la lÃ­nea para TX de voz
+                if b"OK" in u and b"ERROR" not in u:
+                    elapsed = time.time() - t0
+                    logging.info("Dígitos enviados OK en %.1fs (%r)", elapsed, bytes(buf)[:100])
                     self.cmd("AT+VLS=1", wait=2.0)
                     return True
             else:
                 time.sleep(0.05)
-        logging.error("Timeout esperando marcaciÃ³n (%.0fs)", timeout)
+        logging.error("Timeout esperando marcación (%.0fs) buf=%r", timeout, bytes(buf)[:80])
         return False
 
     def beep_line(self, ms: int = 1200) -> None:
-        """Tono fuerte por la lÃ­nea (prueba de que el remoto oye algo)."""
-        for vls in ("5", "1"):
+        """Tono fuerte por la línea (prueba de que el remoto oye algo)."""
+        for vls in ("1", "5"):
             self.cmd(f"AT+VLS={vls}", wait=1.5)
-            r = self.cmd(f"AT+VTS=[1000,0,{ms}]", wait=max(3.0, ms / 500.0))
-            if "ERROR" not in r.upper() or "OK" in r.upper():
+            r = self.cmd(f"AT+VTS=[933,0,{ms}]", wait=max(3.0, ms / 500.0))
+            if "ERROR" not in r.upper():
+                logging.info("Beep OK con VLS=%s", vls)
                 return
+        logging.warning("Beep VTS falló en todos los VLS")
 
     def play_pcm_u8(self, pcm: bytes) -> bool:
-        """Reproduce PCM a la lÃ­nea; prioriza VLS=1 (T) y sube ganancia TX."""
+        """Reproduce PCM a la línea; VLS=1 (T) primero, luego alternativas."""
         payload = shield_dle(pcm)
-        # VLS=5 (ST: speakerâ†’lÃ­nea, off-hook) es el que acepta VTX en salientes;
-        # VLS=1 a veces responde ERROR (Â«not connected to off-hook lineÂ»).
-        for vls in ("5", "1", "3"):
+        for vls in ("1", "5", "13", "4", "3"):
             self.cmd(f"AT+VLS={vls}", wait=2.0)
-            # Ganancia TX al mÃ¡ximo tÃ­pico (0â€“255 en muchos Conexant)
             self.cmd("AT+VGT=255", wait=1.5)
             self.cmd("AT+VSM=1,8000,0,0", wait=2.0)
             r = self.cmd("AT+VTX", wait=4.0)
             u = r.upper()
             if "ERROR" in u and "CONNECT" not in u and "OK" not in u:
-                logging.warning("AT+VTX rechazado con VLS=%s", vls)
+                logging.warning("AT+VTX rechazado con VLS=%s (%r)", vls, r[:60])
                 continue
             time.sleep(0.35)
             fd = self.ser.fileno()
@@ -365,9 +393,9 @@ class Modem:
             os.write(fd, bytes([DLE, ETX]))
             time.sleep(0.3)
             self.drain(0.5)
-            logging.info("LocuciÃ³n enviada VLS=%s (%d bytes PCM)", vls, len(pcm))
+            logging.info("Locución enviada VLS=%s (%d bytes PCM)", vls, len(pcm))
             return True
-        logging.warning("VTX fallÃ³ â€” beep VTS de respaldo")
+        logging.warning("VTX falló — beep VTS de respaldo")
         self.beep_line(1500)
         return False
 
@@ -423,7 +451,7 @@ def main() -> int:
         return 0
 
     stopped = False
-    modem: Modem | None = None
+    modem = None  # Modem | GsmModem
 
     def _cleanup(*_a) -> None:  # noqa: ANN002
         nonlocal modem
@@ -447,13 +475,52 @@ def main() -> int:
         stop_contestador()
         stopped = True
         time.sleep(1.0)
+        logging.info("MODEM_TYPE=%s device=%s", MODEM_TYPE, DEVICE)
+
+        if MODEM_TYPE == "gsm":
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from modem_gsm import GsmModem  # noqa: WPS433
+
+            gsm = GsmModem(DEVICE, BAUD)
+            modem = gsm  # for cleanup typing
+            gsm.init()
+            # Subir TTS como greeting temporal en FAT
+            remote = r"C:\User\outbound.wav"
+            try:
+                gsm.upload_wav(wav, remote)
+            except Exception:
+                logging.exception("Upload TTS a SIM800 falló")
+                gsm.hangup()
+                return 2
+            if not gsm.dial_voice(number, timeout=args.timeout):
+                gsm.hangup()
+                return 2
+            logging.info("Esperando %.0fs a que contesten…", args.wait)
+            t_end = time.time() + args.wait
+            while time.time() < t_end:
+                et, tx = gsm.read_event(timeout=0.4)
+                if et:
+                    logging.info("evento espera: %s %r", et, tx[:60])
+                    u = (tx or "").upper()
+                    if "NO CARRIER" in u or "BUSY" in u:
+                        gsm.hangup()
+                        return 2
+            gsm.beep_dtmf()
+            time.sleep(0.3)
+            gsm.play_remote(remote, volume=95)
+            time.sleep(0.3)
+            gsm.play_remote(remote, volume=95)
+            gsm.hangup()
+            logging.info("Llamada GSM terminada OK (CREC TTS)")
+            return 0
+
         modem = Modem(DEVICE, BAUD)
         modem.init_voice()
         if not modem.dial_voice(number, timeout=args.timeout):
             modem.hangup()
             return 2
         logging.info(
-            "LÃ­nea descolgada â€” esperando %.0fs (contesta el mÃ³vil)â€¦",
+            "Línea descolgada — esperando %.0fs (contesta el móvil)…",
             args.wait,
         )
         # Escuchar eventos mientras suena
@@ -464,7 +531,7 @@ def main() -> int:
                 logging.info("evento espera: %r", chunk[:60])
             else:
                 time.sleep(0.2)
-        # Beep audible + mensaje (x2) para que se note en el mÃ³vil
+        # Beep audible + mensaje (x2) para que se note en el móvil
         modem.beep_line(900)
         time.sleep(0.4)
         pcm = wav_to_u8_8k(wav)
@@ -477,7 +544,7 @@ def main() -> int:
         if ok:
             logging.info("Llamada terminada OK (beep + TTS)")
             return 0
-        logging.warning("Llamada hecha pero TTS no saliÃ³ por VTX")
+        logging.warning("Llamada hecha pero TTS no salió por VTX")
         return 2
     except serial.SerialException as e:
         logging.error("Puerto serie: %s", e)

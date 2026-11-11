@@ -1,49 +1,57 @@
 # Hardware
 
-## Configuración de referencia
+## Configuración de referencia (actual)
 
 | Pieza | Detalle |
 |-------|---------|
-| SBC | Raspberry Pi Zero W (u otra Pi con USB host) |
-| Módem | USB Conexant CX93010 (`0572:1340`) |
-| Línea | PSTN analógica vía RJ11 (no IP phone “puro”) |
-| Driver Linux | `cdc_acm` → `/dev/ttyACM0` |
+| SBC | Raspberry Pi Zero W |
+| Módem | **SIMCom SIM800C** (GSM) vía adaptador USB-UART **CH340** (`1a86:7523`) |
+| Línea | Red móvil (SIM) |
+| Driver Linux | `ch341` → `/dev/ttyUSB0` |
+| Audio contestador | `AT+CREC` (WAV 8 kHz 16-bit en FAT interna `C:\User\…`) — no V.253 |
 
-## Qué debe cumplir el módem
+Firmware visto: `SIM800 R14.18` / `Revision:1418B05SIM800C24`.
 
-- **Hardware modem** (controller-based), no softmodem.
-- Chipset **Conexant CX93010** (o USR5637 controller voice).
-- Soporte `AT+FCLASS=8` (voz / TAM) y audio V.253 (`+VTX` / `+VRX`).
-- CDC-ACM nativo en Linux (sin drivers Windows).
+## SIM / PIN
+
+```bash
+# Con el servicio parado:
+sudo systemctl stop zeromatic
+SIM_PIN=4912 /opt/zeromatic/venv/bin/python3 /opt/zeromatic/bin/gsm_setup_sim.py
+sudo systemctl start zeromatic
+```
+
+El unit systemd lleva `SIM_PIN` y `DISABLE_SIM_PIN=1` para desbloquear una vez y dejar la SIM sin PIN.
 
 ## Comprobar en la Pi
 
 ```bash
-lsusb | grep -i conexant
-ls -l /dev/ttyACM0
-dmesg | grep -i ttyACM
+lsusb | grep -i 1a86
+ls -l /dev/ttyUSB0
+dmesg | grep -i ch341
 ```
-
-Firmware típico: `CX93001-EIS_V0.2013-V92` (`ATI3`).
-
-## Test de hardware
 
 Con el servicio parado:
 
 ```bash
 sudo systemctl stop zeromatic
-sudo /opt/zeromatic/venv/bin/python3 /opt/zeromatic/bin/hw_modem_test.py
-sudo /opt/zeromatic/venv/bin/python3 /opt/zeromatic/bin/hw_voice_probe.py
+python3 - <<'PY'
+import serial, time
+s=serial.Serial('/dev/ttyUSB0',115200,timeout=0.3)
+s.write(b'AT\r'); time.sleep(0.3); print(s.read(64))
+s.write(b'ATI\r'); time.sleep(0.4); print(s.read(128))
+s.write(b'AT+CPIN?\r'); time.sleep(0.5); print(s.read(128))
+PY
 sudo systemctl start zeromatic
 ```
 
-Esperado: AT OK, `FCLASS` incluye `8`, `AT+VRX` → `CONNECT`, sin `NO DIALTONE` si hay línea.
+## Legado: Conexant CX93010 (PSTN)
 
-## ¿Comprar otro?
+Si vuelves al módem USB Conexant (`0572:1340` → `/dev/ttyACM0`):
 
-**No**, si el actual responde como arriba. El CX93010 ya es el chipset correcto.
+```ini
+Environment=MODEM_TYPE=conexant
+Environment=MODEM_DEVICE=/dev/ttyACM0
+```
 
-Repuesto barato (mismo chip): **StarTech USB56KEMH2** (~35–45 €).  
-Evitar softmodems genéricos baratos en ARM/Pi.
-
-Informe completo del test del 2026-10-24: [INFORME-hardware-modem-2026-10-24.md](../INFORME-hardware-modem-2026-10-24.md).
+Detalle del test 2026-10-24: [INFORME-hardware-modem-2026-10-24.md](../INFORME-hardware-modem-2026-10-24.md).
