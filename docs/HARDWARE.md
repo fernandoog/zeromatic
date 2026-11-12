@@ -17,11 +17,11 @@ Firmware visto: `SIM800 R14.18` / `Revision:1418B05SIM800C24`.
 ```bash
 # Con el servicio parado:
 sudo systemctl stop zeromatic
-SIM_PIN=4912 /opt/zeromatic/venv/bin/python3 /opt/zeromatic/bin/gsm_setup_sim.py
+SIM_PIN=1234 /opt/zeromatic/venv/bin/python3 /opt/zeromatic/bin/gsm_setup_sim.py
 sudo systemctl start zeromatic
 ```
 
-El unit systemd lleva `SIM_PIN` y `DISABLE_SIM_PIN=1` para desbloquear una vez y dejar la SIM sin PIN.
+El unit systemd admite `SIM_PIN` y `DISABLE_SIM_PIN=1` (definir el PIN real solo en un override local, no en el repo).
 
 ## Comprobar en la Pi
 

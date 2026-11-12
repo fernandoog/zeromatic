@@ -30,6 +30,13 @@ usermod -aG voice,dialout "${SUDO_USER:-zeromatic}" || true
 chown -R root:voice /var/spool/voice
 chmod 775 /var/spool/voice/incoming /var/spool/voice/messages /var/spool/voice/processed
 touch /var/log/zeromatic.log
+chmod 644 /var/log/zeromatic.log
+# Rotación del log de aplicación (no acumular basura de audio)
+if [[ -f "$SRC/etc/logrotate.zeromatic" ]]; then
+  install -m 644 "$SRC/etc/logrotate.zeromatic" /etc/logrotate.d/zeromatic
+elif [[ -f /opt/zeromatic/etc/logrotate.zeromatic ]]; then
+  install -m 644 /opt/zeromatic/etc/logrotate.zeromatic /etc/logrotate.d/zeromatic
+fi
 chown root:voice /var/log/zeromatic.log
 chmod 664 /var/log/zeromatic.log
 

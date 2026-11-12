@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import signal
 import struct
 import subprocess
@@ -52,7 +53,7 @@ def _default_device() -> str:
 DEVICE = os.environ.get("MODEM_DEVICE", _default_device())
 BAUD = int(os.environ.get("MODEM_BAUD", "115200"))
 RINGS_TO_ANSWER = int(os.environ.get("RINGS_TO_ANSWER", "1"))
-MAX_RECORD_SEC = int(os.environ.get("MAX_RECORD_SEC", "90"))
+MAX_RECORD_SEC = int(os.environ.get("MAX_RECORD_SEC", "35"))
 # Segundos de silencio / tono de ocupado tras colgar antes de cortar la grabación
 SILENCE_HANG_SEC = float(os.environ.get("SILENCE_HANG_SEC", "2.0"))
 # |sample-128| medio por ventana para considerar "silencio" (u8 PCM)
@@ -69,6 +70,22 @@ LOG_PATH = Path(
         os.environ.get("BUZONERA_LOG", os.environ.get("CONTESTADOR_LOG", _log_default)),
     )
 )
+SMS_FORWARD = os.environ.get("SMS_FORWARD", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+SMS_MAIL_TO = os.environ.get("SMS_MAIL_TO", "").strip()
+SMS_POLL_SEC = float(os.environ.get("SMS_POLL_SEC", "45"))
+SMS_LLAMAR = os.environ.get("SMS_LLAMAR", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+# Segundos tras marcar antes de reproducir el TTS (timbre + descolgar)
+SMS_CALL_WAIT = float(os.environ.get("SMS_CALL_WAIT", "22"))
 
 
 def resolve_modem_type() -> str:
@@ -97,12 +114,18 @@ running = True
 
 
 def setup_log() -> None:
+    from logging.handlers import RotatingFileHandler
+
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # Conservar historial para depurar; rotar para no llenar el disco.
+    file_handler = RotatingFileHandler(
+        LOG_PATH, maxBytes=5 * 1024 * 1024, backupCount=8, encoding="utf-8"
+    )
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
         handlers=[
-            logging.FileHandler(LOG_PATH),
+            file_handler,
             logging.StreamHandler(sys.stdout),
         ],
     )
@@ -940,6 +963,202 @@ def process_message(wav: Path, caller: str) -> None:
         logging.exception("Pipeline falló al lanzar: %s", e)
 
 
+def parse_sms_llamar(text: str) -> tuple[str, str] | None:
+    """'LLAMAR 600000000 Esto es un mensaje' → (número, texto TTS)."""
+    if not text:
+        return None
+    m = re.match(
+        r"^\s*LLAMAR\s+(\+?\d[\d\s.\-]{6,18}\d)\s+(.+?)\s*$",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return None
+    raw_num = re.sub(r"[^\d+]", "", m.group(1))
+    spoken = " ".join(m.group(2).split()).strip()
+    if not raw_num or not spoken:
+        return None
+    # ATD del SIM800: dígitos (y + opcional)
+    number = re.sub(r"[^\d+]", "", raw_num)
+    if number.count("+") > 1 or ( "+" in number and not number.startswith("+")):
+        number = number.replace("+", "")
+    if len(re.sub(r"\D", "", number)) < 7:
+        return None
+    return number, spoken
+
+
+def tts_espeak_wav(text: str, out: Path) -> Path:
+    """Sintetiza castellano con espeak-ng → WAV 8 kHz 16-bit mono."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    raw = Path("/tmp/zeromatic_sms_tts_raw.wav")
+    subprocess.check_call(
+        ["espeak-ng", "-v", "es", "-s", "120", "-a", "200", "-w", str(raw), text],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    subprocess.check_call(
+        [
+            "sox",
+            str(raw),
+            "-r",
+            "8000",
+            "-c",
+            "1",
+            "-b",
+            "16",
+            "-e",
+            "signed-integer",
+            str(out),
+            "vol",
+            "4",
+            "dB",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return out
+
+
+def sms_dial_and_speak(modem, number: str, spoken: str) -> bool:
+    """Marca number y reproduce `spoken` (TTS) por CREC en el SIM800."""
+    remote = r"C:\User\outbound.wav"
+    wav = Path("/tmp/zeromatic_sms_tts.wav")
+    logging.info("SMS LLAMAR: marcando %s — TTS %r", number, spoken[:120])
+    try:
+        tts_espeak_wav(spoken, wav)
+    except Exception:
+        logging.exception("TTS espeak falló")
+        return False
+    try:
+        # Liberar FAT (saludo) para caber el TTS
+        try:
+            modem.release_greeting_space()
+        except Exception:
+            pass
+        modem.cmd(f'AT+FSDEL="{remote}"', wait=1.5, expect_ok=False)
+        modem.upload_wav(wav, remote)
+        if not modem.dial_voice(number, timeout=45.0):
+            modem.hangup()
+            return False
+        logging.info("Esperando hasta %.0fs a que contesten…", SMS_CALL_WAIT)
+        t_end = time.time() + SMS_CALL_WAIT
+        while time.time() < t_end:
+            et, tx = modem.read_event(timeout=0.5)
+            u = (tx or "").upper()
+            if "NO CARRIER" in u or "BUSY" in u or "NO ANSWER" in u:
+                logging.error("Destino no contestó / ocupado: %r", (tx or "")[:80])
+                modem.hangup()
+                return False
+            if et == "line" and "+CLCC:" in u:
+                # MO active (dir=0,stat=0) → contestó
+                try:
+                    body = tx.split(":", 1)[1]
+                    parts = [p.strip() for p in body.split(",")]
+                    if int(parts[1]) == 0 and int(parts[2]) == 0:
+                        logging.info("Destino descolgó (CLCC active)")
+                        break
+                except Exception:
+                    pass
+        try:
+            modem.beep_crec()
+        except Exception:
+            modem.beep_dtmf()
+        time.sleep(0.25)
+        modem.play_remote(remote, volume=100)
+        time.sleep(0.35)
+        modem.play_remote(remote, volume=100)
+        modem.hangup()
+        logging.info("SMS LLAMAR completada (%s)", number)
+        return True
+    except Exception:
+        logging.exception("SMS LLAMAR falló")
+        try:
+            modem.hangup()
+        except Exception:
+            pass
+        return False
+    finally:
+        try:
+            modem.force_recover()
+        except Exception:
+            logging.exception("Recover tras LLAMAR falló")
+        try:
+            modem.upload_prompt_files(GREETING_WAV)
+        except Exception:
+            logging.exception("No se pudo reponer saludo tras LLAMAR")
+        try:
+            wav.unlink(missing_ok=True)
+            Path("/tmp/zeromatic_sms_tts_raw.wav").unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def forward_sms_and_delete(modem, index: int | None = None) -> int:
+    """Lee SMS, reenvía por correo, ejecuta LLAMAR si aplica, y borra si el mail OK.
+
+    Devuelve cuántos SMS se reenviaron y borraron.
+    """
+    if not SMS_FORWARD and not SMS_LLAMAR:
+        return 0
+    try:
+        from send_mail import send_sms_forward  # noqa: WPS433
+    except Exception:
+        sys.path.insert(0, str(INSTALL_ROOT / "bin"))
+        from send_mail import send_sms_forward  # noqa: WPS433
+
+    done = 0
+    indices: list[int]
+    if index is not None:
+        indices = [index]
+    else:
+        try:
+            indices = modem.sms_list_indices()
+        except Exception:
+            logging.exception("No se pudo listar SMS")
+            return 0
+    for idx in indices:
+        try:
+            msg = modem.sms_read(idx)
+            if not msg:
+                logging.warning("SMS %d ilegible — skip", idx)
+                continue
+            sender = msg.get("sender") or "?"
+            when = msg.get("time") or ""
+            text = msg.get("text") or ""
+            logging.info(
+                "SMS#%d de %s (%s): %s",
+                idx,
+                sender,
+                when,
+                (text[:80] + "…") if len(text) > 80 else text,
+            )
+            mail_ok = False
+            if SMS_FORWARD:
+                send_sms_forward(sender, when, text, mail_to=SMS_MAIL_TO or None)
+                mail_ok = True
+            else:
+                mail_ok = True  # sin reenvío: permitir borrar tras LLAMAR
+
+            llamar = parse_sms_llamar(text) if SMS_LLAMAR else None
+            if llamar:
+                number, spoken = llamar
+                logging.info("SMS#%d comando LLAMAR → %s", idx, number)
+                ok_call = sms_dial_and_speak(modem, number, spoken)
+                if not ok_call:
+                    logging.error("SMS#%d LLAMAR no completó la llamada", idx)
+
+            # Borrar si el correo OK (o reenvío desactivado). LLAMAR fallido no retiene el SMS
+            # para no reintentar en bucle; el correo ya documenta el comando.
+            if mail_ok and modem.sms_delete(idx):
+                done += 1
+                logging.info("SMS#%d procesado y borrado", idx)
+            elif mail_ok:
+                logging.error("SMS#%d procesado pero no se borró de la SIM", idx)
+        except Exception:
+            logging.exception("Fallo procesando SMS#%s — se conserva en la SIM", idx)
+    return done
+
+
 def seize_and_play(modem: Modem, caller: str, already_answered: bool = False) -> None:
     """Descolgar al instante, locución y grabar (Conexant V.253)."""
     logging.info("Atendiendo YA (caller=%s)", caller or "?")
@@ -1008,20 +1227,39 @@ def seize_and_play_gsm(modem, caller: str) -> None:
             pass
         modem.answer_now()
         time.sleep(0.5)
+        # Preparar slot / liberar FAT durante la locución (no tras el pitido).
         try:
-            modem.play_remote(GREETING_REMOTE, volume=90)
+            modem.prepare_record_slot(RECORD_ID)
+        except Exception:
+            logging.exception("No se pudo preparar slot de grabación")
+        try:
+            modem.play_remote(GREETING_REMOTE, volume=95)
         except Exception:
             logging.exception("Play greeting falló")
-            modem.beep_dtmf()
-        modem.beep_dtmf()
+        try:
+            modem.release_greeting_space()
+        except Exception:
+            logging.exception("No se pudo liberar espacio del saludo")
+        # Pitido WAV por CREC (audible en red). Luego CREC=1 al instante.
         stamp = time.strftime("%Y%m%d_%H%M%S")
         wav = INCOMING_DIR / f"msg_{stamp}.wav"
-        size = modem.record_to_id(RECORD_ID, max_sec=MAX_RECORD_SEC)
+        try:
+            modem.beep_crec()
+        except Exception:
+            logging.exception("Pitido falló")
+        if not modem.start_record(RECORD_ID, max_sec=MAX_RECORD_SEC):
+            raise RuntimeError("CREC no arrancó")
+        size = modem.wait_record_done(RECORD_ID, max_sec=MAX_RECORD_SEC)
         modem.hangup()
         n = 0
-        if size > 100:
+        if size > 50:
             n = modem.download_record(RECORD_ID, wav, total=size)
         modem.force_recover()
+        # Reponer saludo + pitido para la siguiente llamada
+        try:
+            modem.upload_prompt_files(GREETING_WAV)
+        except Exception:
+            logging.exception("No se pudo reponer saludo/pitido")
         if n > 1000:
             logging.info("Mensaje GSM guardado %s (%d bytes)", wav, n)
             process_message(wav, caller)
@@ -1045,7 +1283,12 @@ def seize_and_play_gsm(modem, caller: str) -> None:
 
 
 def main_gsm() -> int:
-    from modem_gsm import GREETING_REMOTE, GsmModem, parse_clip  # noqa: WPS433
+    from modem_gsm import (  # noqa: WPS433
+        GREETING_REMOTE,
+        GsmModem,
+        parse_caller_from_urc,
+        parse_clip,
+    )
 
     ensure_greeting()
     logging.info("Instalación: %s (MODEM_TYPE=gsm device=%s)", INSTALL_ROOT, DEVICE)
@@ -1054,43 +1297,100 @@ def main_gsm() -> int:
     modem = GsmModem(DEVICE, BAUD)
     try:
         modem.init()
-        # Subir locución a la FAT del módulo (idempotente)
+        # Saludo + pitido en AMR (la FAT del SIM800C apenas tiene ~180 KiB)
         try:
-            modem.upload_wav(GREETING_WAV, GREETING_REMOTE)
+            modem.upload_prompt_files(GREETING_WAV)
         except Exception:
             logging.exception(
-                "No se pudo subir greeting a SIM800 (%s) — usaré DTMF",
+                "No se pudo subir saludo/pitido a SIM800 (%s) — usaré DTMF",
                 GREETING_REMOTE,
             )
         caller = ""
         rings = 0
+        last_clcc_poll = 0.0
+        last_sms_poll = 0.0
+        need = max(1, RINGS_TO_ANSWER)
         logging.info(
-            "Esperando llamadas GSM (contesta al RING %d; CLIP entre timbres)…",
-            RINGS_TO_ANSWER,
+            "Esperando llamadas/SMS GSM (RING %d; SMS→%s)…",
+            need,
+            SMS_MAIL_TO or "(MAIL_TO)",
         )
+        # Vaciar bandeja pendiente al arrancar
+        if SMS_FORWARD:
+            try:
+                n = forward_sms_and_delete(modem)
+                if n:
+                    logging.info("SMS pendientes reenviados al arranque: %d", n)
+            except Exception:
+                logging.exception("Barrido SMS inicial falló")
+            last_sms_poll = time.time()
         while running:
-            etype, text = modem.read_event(timeout=1.0)
+            etype, text = modem.read_event(timeout=0.8)
             if not etype:
+                now = time.time()
+                # Respaldo: si el URC RING se pierde, CLCC detecta llamada entrante.
+                if now - last_clcc_poll >= 2.0:
+                    last_clcc_poll = now
+                    etype, text = modem.poll_incoming()
+                # Barrido periódico de SMS por si se perdió +CMTI
+                if not etype and SMS_FORWARD and now - last_sms_poll >= SMS_POLL_SEC:
+                    last_sms_poll = now
+                    try:
+                        forward_sms_and_delete(modem)
+                    except Exception:
+                        logging.exception("Barrido SMS periódico falló")
+                if not etype:
+                    continue
+            # El número suele venir en el mismo bloque CLCC/CLIP que el RING
+            extracted = parse_caller_from_urc(text)
+            if extracted:
+                caller = extracted
+            if etype == "sms":
+                idx = modem.parse_cmti_index(text)
+                logging.info("SMS nuevo indicado: %s", text.strip())
+                try:
+                    forward_sms_and_delete(modem, index=idx)
+                except Exception:
+                    logging.exception("Procesar +CMTI falló")
+                last_sms_poll = time.time()
                 continue
             if etype == "ring":
                 rings += 1
                 logging.info(
                     "RING %d/%d (%s) caller=%s",
                     rings,
-                    RINGS_TO_ANSWER,
-                    text,
+                    need,
+                    text.replace("\r", "\\r").replace("\n", "\\n")[:120],
                     caller or "?",
                 )
-                if rings >= max(1, RINGS_TO_ANSWER):
+                if rings >= need:
+                    if not caller:
+                        caller = modem.fetch_caller_id()
+                        logging.info("Caller-ID (fetch): %s", caller or "?")
                     seize_and_play_gsm(modem, caller)
                     caller = ""
                     rings = 0
+                    last_clcc_poll = time.time()
+                    # Tras la llamada, vaciar SMS llegados mientras hablábamos
+                    if SMS_FORWARD:
+                        try:
+                            forward_sms_and_delete(modem)
+                        except Exception:
+                            logging.exception("Barrido SMS post-llamada falló")
+                        last_sms_poll = time.time()
                 continue
             if etype == "line":
                 u = text.upper()
-                if u.startswith("+CLIP:"):
-                    caller = parse_clip(text) or caller
-                    logging.info("Caller-ID (CLIP): %s", caller or "?")
+                if u.startswith("+CLIP:") or u.startswith("+CLCC:"):
+                    if caller:
+                        logging.info("Caller-ID: %s", caller)
+                elif u.startswith("+CMTI:"):
+                    idx = modem.parse_cmti_index(text)
+                    try:
+                        forward_sms_and_delete(modem, index=idx)
+                    except Exception:
+                        logging.exception("Procesar +CMTI (line) falló")
+                    last_sms_poll = time.time()
                 elif "NO CARRIER" in u:
                     logging.info("NO CARRIER (idle)")
                     rings = 0

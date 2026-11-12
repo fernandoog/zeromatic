@@ -51,13 +51,25 @@ Con el servicio activo no hay que hacer nada:
 2. Locución de bienvenida + beep
 3. Graba hasta silencio o `MAX_RECORD_SEC`
 4. Transcribe y envía correo (en segundo plano)
+5. Tras correo OK se borran los ficheros de audio; queda el log en `/var/log/zeromatic.log`
+
+### SMS (SIM800)
+
+- Todo SMS recibido se reenvía por correo (`SMS_MAIL_TO` o `MAIL_TO`) y se borra de la SIM si el envío OK.
+- Comando especial (mayúsculas/minúsculas indiferente):
+
+```text
+LLAMAR 600000000 Esto es un mensaje de prueba
+```
+
+Marca ese número y reproduce el texto con TTS (`espeak-ng`).
 
 ```bash
 sudo systemctl status zeromatic
 sudo journalctl -u zeromatic -f
 ```
 
-**Importante:** si usas el módem a mano (`test_call.py`, `hw_modem_test.py`, `minicom`), para el servicio antes; si no, pelean por `/dev/ttyACM0`.
+**Importante:** si usas el módem a mano (`test_call.py`, `hw_modem_test.py`, `minicom`), para el servicio antes; si no, pelean por el puerto serie.
 
 ## Configuración de correo
 
@@ -70,6 +82,7 @@ MAIL_FROM=tu@email.com
 GMAIL_USER=tu@email.com
 GMAIL_APP_PASSWORD="xxxx xxxx xxxx xxxx"
 LINE_NUMBER=912345678
+SMS_MAIL_TO=avisos@example.com
 # Opcional:
 # OPENAI_API_KEY=sk-...
 ```

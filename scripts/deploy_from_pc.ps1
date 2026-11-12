@@ -1,6 +1,6 @@
 # Deploy Zeromatic sources to a Raspberry Pi over SSH.
 # Example:
-#   .\scripts\deploy_from_pc.ps1 -HostName 192.168.1.23 -User zeromatic -IdentityFile "C:\Users\ferna\OneDrive\Documentos\Freelance\Servidores\Zeromatic\zeromatic"
+#   .\scripts\deploy_from_pc.ps1 -HostName 192.168.1.50 -User zeromatic -IdentityFile "$env:USERPROFILE\.ssh\zeromatic"
 
 param(
     [Parameter(Mandatory = $true)]
@@ -8,7 +8,7 @@ param(
 
     [string]$User = "zeromatic",
 
-    [string]$IdentityFile = "C:\Users\ferna\OneDrive\Documentos\Freelance\Servidores\Zeromatic\zeromatic",
+    [string]$IdentityFile = "$env:USERPROFILE\.ssh\zeromatic",
 
     [string]$RemoteTmp = "/tmp/zeromatic-deploy"
 )

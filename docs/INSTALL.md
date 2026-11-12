@@ -61,7 +61,7 @@ sudo systemctl start zeromatic
 Desde Windows (PowerShell), con SSH configurado:
 
 ```powershell
-.\scripts\deploy_from_pc.ps1 -HostName 192.168.1.23 -User zeromatic
+.\scripts\deploy_from_pc.ps1 -HostName 192.168.1.50 -User zeromatic
 ```
 
 Ajusta host, usuario y clave SSH según tu entorno (por defecto usa la clave en `Servidores\Zeromatic\zeromatic`).

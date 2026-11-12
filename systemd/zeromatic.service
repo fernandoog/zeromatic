@@ -8,13 +8,20 @@ Type=simple
 Environment=MODEM_TYPE=gsm
 Environment=MODEM_DEVICE=/dev/ttyUSB0
 Environment=MODEM_BAUD=115200
-Environment=SIM_PIN=4912
+# SIM_PIN: definir en override local (/etc/systemd/system/zeromatic.service.d/) — no subir el PIN real
+Environment=SIM_PIN=
 Environment=DISABLE_SIM_PIN=1
-Environment=RINGS_TO_ANSWER=2
-Environment=MAX_RECORD_SEC=59
+Environment=RINGS_TO_ANSWER=1
+Environment=MAX_RECORD_SEC=35
 Environment=SILENCE_HANG_SEC=5.0
 Environment=SILENCE_RMS_THRESH=8
 Environment=MIN_MESSAGE_SEC=3.0
+Environment=SMS_FORWARD=1
+# SMS_MAIL_TO vacío → usa MAIL_TO de /etc/zeromatic/email.env
+Environment=SMS_MAIL_TO=
+Environment=SMS_POLL_SEC=45
+Environment=SMS_LLAMAR=1
+Environment=SMS_CALL_WAIT=22
 ExecStartPre=/bin/sleep 3
 ExecStart=/opt/zeromatic/venv/bin/python3 /opt/zeromatic/bin/zeromatic_daemon.py
 Restart=always

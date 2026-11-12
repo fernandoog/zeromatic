@@ -1,19 +1,19 @@
 #!/bin/bash
-# Llamado por vgetty tras grabar un mensaje. Arg1 = ruta del .rmd
+# Pipeline post-grabación: transcribe + mail. Arg1 = ruta del .wav/.rmd
+# Tras correo OK se borran todos los temporales; el rastro queda en el log.
 set -euo pipefail
 
 SRC="${1:-}"
-LOG=/var/log/zeromatic.log
+LOG="${ZEROMATIC_LOG:-/var/log/zeromatic.log}"
 WORKDIR=/var/spool/voice/processed
 ENV_FILE=/etc/zeromatic/email.env
-mkdir -p "$WORKDIR"
+mkdir -p "$WORKDIR" "$(dirname "$LOG")"
 exec >>"$LOG" 2>&1
 
 # Cargar LINE_NUMBER / CALLED_ID desde email.env si no vienen en el entorno
 if [[ -f "$ENV_FILE" ]]; then
   # shellcheck disable=SC1090
   set -a
-  # Evitar que valores con espacios rompan el source
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%$'\r'}"
     [[ -z "$line" || "$line" =~ ^# ]] && continue
@@ -29,7 +29,6 @@ if [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
-# Called-ID = número de esta línea (DNIS). En analógico se configura a mano.
 if [[ -z "${CALLED_ID:-}" && -n "${LINE_NUMBER:-}" ]]; then
   CALLED_ID="$LINE_NUMBER"
 fi
@@ -51,6 +50,14 @@ WAV="$OUTDIR/mensaje.wav"
 MP3="$OUTDIR/mensaje.mp3"
 TXT="$OUTDIR/transcripcion.txt"
 META="$OUTDIR/meta.txt"
+
+cleanup_all() {
+  rm -f -- "$SRC" 2>/dev/null || true
+  rm -rf -- "$OUTDIR" 2>/dev/null || true
+  rm -f /tmp/zeromatic_conv.err /tmp/zeromatic_gsm_*.wav /tmp/zeromatic_gsm_*.amr \
+        /tmp/zeromatic_beep.wav /tmp/zeromatic_amr_src.wav /tmp/zeromatic_amr_out.amr \
+        2>/dev/null || true
+}
 
 {
   echo "Fecha: $(ts)"
@@ -84,18 +91,24 @@ else
   MP3=""
 fi
 
-# Transcripción
 export CONTESTADOR_WAV="$WAV"
 export CONTESTADOR_TXT="$TXT"
 /opt/zeromatic/bin/transcribe.py || echo "(sin transcripción)" >"$TXT"
 
-# Envío de correo
-/opt/zeromatic/bin/send_mail.py \
+AUDIO_ATTACH="${MP3:-}"
+if [[ -z "$AUDIO_ATTACH" || ! -s "$AUDIO_ATTACH" ]]; then
+  AUDIO_ATTACH="${WAV:-}"
+fi
+
+if /opt/zeromatic/bin/send_mail.py \
   --meta "$META" \
   --transcript "$TXT" \
-  --audio "${MP3:-$WAV}" \
-  || echo "$(ts) ERROR enviando correo"
+  --audio "${AUDIO_ATTACH}"; then
+  echo "$(ts) Correo enviado OK — eliminando temporales (src=$SRC outdir=$OUTDIR)"
+  cleanup_all
+  echo "$(ts) Limpieza completada (solo queda el log en $LOG)"
+  exit 0
+fi
 
-# Conservar original
-cp -n "$SRC" "$OUTDIR/" 2>/dev/null || true
-echo "$(ts) OK procesado en $OUTDIR"
+echo "$(ts) ERROR enviando correo — se conservan $OUTDIR y $SRC para depurar"
+exit 1

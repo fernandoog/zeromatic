@@ -2,8 +2,8 @@
 """Desbloquea la SIM (PIN) y opcionalmente desactiva el PIN en un SIM800.
 
 Uso:
-  SIM_PIN=4912 /opt/zeromatic/venv/bin/python3 bin/gsm_setup_sim.py
-  /opt/zeromatic/venv/bin/python3 bin/gsm_setup_sim.py --pin 4912 --keep-pin
+  SIM_PIN=1234 /opt/zeromatic/venv/bin/python3 bin/gsm_setup_sim.py
+  /opt/zeromatic/venv/bin/python3 bin/gsm_setup_sim.py --pin 1234 --keep-pin
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Configura PIN de la SIM en SIM800")
     p.add_argument("--device", default=os.environ.get("MODEM_DEVICE", "/dev/ttyUSB0"))
     p.add_argument("--baud", type=int, default=int(os.environ.get("MODEM_BAUD", "115200")))
-    p.add_argument("--pin", default=os.environ.get("SIM_PIN", "4912"))
+    p.add_argument("--pin", default=os.environ.get("SIM_PIN", ""))
     p.add_argument(
         "--keep-pin",
         action="store_true",
@@ -40,6 +40,9 @@ def main() -> int:
 
     if not Path(args.device).exists():
         print(f"ERROR: no existe {args.device}", file=sys.stderr)
+        return 2
+    if not str(args.pin).strip():
+        print("ERROR: indica --pin o SIM_PIN", file=sys.stderr)
         return 2
 
     os.environ["SIM_PIN"] = args.pin

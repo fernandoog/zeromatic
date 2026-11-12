@@ -1,0 +1,10 @@
+/var/log/zeromatic.log {
+    weekly
+    rotate 8
+    size 5M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
