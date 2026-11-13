@@ -64,6 +64,22 @@ LLAMAR 600000000 Esto es un mensaje de prueba
 
 Marca ese número y reproduce el texto con TTS (`espeak-ng`).
 
+### Internet: WiFi + fallback GPRS (SIM800)
+
+Por defecto el correo y la transcripción usan **WiFi**. Si no hay ruta a Internet al procesar un mensaje, se abre una sesión **GPRS/PPP** por el mismo SIM800:
+
+1. Para `zeromatic` unos segundos (el puerto serie no admite AT y PPP a la vez).
+2. Sube `ppp0`, reintenta transcripción + correo.
+3. Cierra PPP y rearranca el contestador.
+
+Configura `/etc/zeromatic/gprs.env` (plantilla: `etc/gprs.env.example`): **`GPRS_APN`** del operador y `GPRS_FALLBACK=1`. Requiere el paquete `ppp` y datos móviles en la SIM.
+
+```bash
+sudo /opt/zeromatic/bin/gprs_failover.sh status
+```
+
+**Nota:** el reenvío de SMS en vivo sigue necesitando red en el momento de recibir el SMS (no pasa por `on_message.sh`).
+
 ```bash
 sudo systemctl status zeromatic
 sudo journalctl -u zeromatic -f

@@ -9,7 +9,7 @@ if [[ ! -d "$SRC/bin" ]]; then
 fi
 
 
-install -d -m 755 /opt/zeromatic/bin /opt/zeromatic/media /etc/zeromatic \
+install -d -m 755 /opt/zeromatic/bin /opt/zeromatic/etc/ppp /opt/zeromatic/media /etc/zeromatic \
   /var/spool/voice/incoming /var/spool/voice/messages /var/spool/voice/processed
 install -m 755 "$SRC"/bin/*.sh /opt/zeromatic/bin/ 2>/dev/null || true
 install -m 755 "$SRC"/bin/*.py /opt/zeromatic/bin/
@@ -22,6 +22,13 @@ install -m 644 "$SRC"/systemd/zeromatic.service /etc/systemd/system/zeromatic.se
 if [[ ! -f /etc/zeromatic/email.env ]]; then
   install -m 600 "$SRC"/etc/email.env.example /etc/zeromatic/email.env
   echo "EDITAR: /etc/zeromatic/email.env (GMAIL_APP_PASSWORD)"
+fi
+if [[ ! -f /etc/zeromatic/gprs.env ]]; then
+  install -m 600 "$SRC"/etc/gprs.env.example /etc/zeromatic/gprs.env
+  echo "EDITAR: /etc/zeromatic/gprs.env (GPRS_APN de tu operador)"
+fi
+if [[ -f "$SRC/etc/ppp/chat-sim800-disconnect" ]]; then
+  install -m 644 "$SRC"/etc/ppp/chat-sim800-disconnect /opt/zeromatic/etc/ppp/
 fi
 
 # Grupo voice + permisos
@@ -59,7 +66,7 @@ sed -i 's/^speed 38400/speed 115200/' /etc/mgetty/mgetty.config || true
 
 # Dependencias de sistema (idempotente)
 export DEBIAN_FRONTEND=noninteractive
-apt-get install -y -qq sox espeak-ng flac ffmpeg python3-venv python3-pip >/dev/null || true
+apt-get install -y -qq sox espeak-ng flac ffmpeg python3-venv python3-pip ppp >/dev/null || true
 
 # Python deps (venv ligero)
 if [[ ! -d /opt/zeromatic/venv ]]; then

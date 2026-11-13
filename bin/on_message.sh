@@ -6,28 +6,13 @@ set -euo pipefail
 SRC="${1:-}"
 LOG="${ZEROMATIC_LOG:-/var/log/zeromatic.log}"
 WORKDIR=/var/spool/voice/processed
-ENV_FILE=/etc/zeromatic/email.env
+INSTALL_ROOT="${INSTALL_ROOT:-/opt/zeromatic}"
 mkdir -p "$WORKDIR" "$(dirname "$LOG")"
 exec >>"$LOG" 2>&1
 
-# Cargar LINE_NUMBER / CALLED_ID desde email.env si no vienen en el entorno
-if [[ -f "$ENV_FILE" ]]; then
-  # shellcheck disable=SC1090
-  set -a
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line%$'\r'}"
-    [[ -z "$line" || "$line" =~ ^# ]] && continue
-    [[ "$line" != *=* ]] && continue
-    key="${line%%=*}"
-    val="${line#*=}"
-    val="${val%\"}"; val="${val#\"}"
-    val="${val%\'}"; val="${val#\'}"
-    case "$key" in
-      LINE_NUMBER|CALLED_ID|MAIL_TO) printf -v "$key" '%s' "$val" ;;
-    esac
-  done <"$ENV_FILE"
-  set +a
-fi
+# shellcheck source=load_zeromatic_env.sh
+source "$INSTALL_ROOT/bin/load_zeromatic_env.sh"
+load_zeromatic_env
 
 if [[ -z "${CALLED_ID:-}" && -n "${LINE_NUMBER:-}" ]]; then
   CALLED_ID="$LINE_NUMBER"
@@ -91,24 +76,76 @@ else
   MP3=""
 fi
 
-export CONTESTADOR_WAV="$WAV"
-export CONTESTADOR_TXT="$TXT"
-/opt/zeromatic/bin/transcribe.py || echo "(sin transcripción)" >"$TXT"
+run_transcribe() {
+  export CONTESTADOR_WAV="$WAV"
+  export CONTESTADOR_TXT="$TXT"
+  /opt/zeromatic/bin/transcribe.py || echo "(sin transcripción)" >"$TXT"
+}
+
+transcript_weak() {
+  [[ ! -f "$TXT" ]] && return 0
+  grep -qiE '^\(sin transcripción|no disponible|no se entendió' "$TXT" 2>/dev/null
+}
 
 AUDIO_ATTACH="${MP3:-}"
 if [[ -z "$AUDIO_ATTACH" || ! -s "$AUDIO_ATTACH" ]]; then
   AUDIO_ATTACH="${WAV:-}"
 fi
 
-if /opt/zeromatic/bin/send_mail.py \
-  --meta "$META" \
-  --transcript "$TXT" \
-  --audio "${AUDIO_ATTACH}"; then
+send_mail_now() {
+  /opt/zeromatic/bin/send_mail.py \
+    --meta "$META" \
+    --transcript "$TXT" \
+    --audio "${AUDIO_ATTACH}"
+}
+
+finish_ok() {
   echo "$(ts) Correo enviado OK — eliminando temporales (src=$SRC outdir=$OUTDIR)"
   cleanup_all
   echo "$(ts) Limpieza completada (solo queda el log en $LOG)"
-  exit 0
+}
+
+if zeromatic_net_reachable; then
+  run_transcribe
+  if send_mail_now; then
+    finish_ok
+    exit 0
+  fi
+  if zeromatic_net_reachable; then
+    echo "$(ts) ERROR enviando correo (red OK — revisa Gmail/credenciales) — se conservan $OUTDIR y $SRC"
+    exit 1
+  fi
+  echo "$(ts) Correo falló por red; probando fallback GPRS…"
+else
+  echo "$(ts) Sin Internet por WiFi; probando fallback GPRS…"
 fi
 
-echo "$(ts) ERROR enviando correo — se conservan $OUTDIR y $SRC para depurar"
+if [[ "${GPRS_FALLBACK:-1}" != "1" ]] || [[ -z "${GPRS_APN:-}" ]]; then
+  echo "$(ts) GPRS desactivado o sin GPRS_APN en /etc/zeromatic/gprs.env — se conservan $OUTDIR y $SRC"
+  exit 1
+fi
+
+GPRS_SCRIPT="$INSTALL_ROOT/bin/gprs_failover.sh"
+if ! [[ -x "$GPRS_SCRIPT" ]]; then
+  echo "$(ts) ERROR: no encuentro $GPRS_SCRIPT"
+  exit 1
+fi
+
+if "$GPRS_SCRIPT" up; then
+  trap "$GPRS_SCRIPT down" EXIT
+  run_transcribe
+  if transcript_weak; then
+    run_transcribe
+  fi
+  if send_mail_now; then
+    "$GPRS_SCRIPT" down
+    trap - EXIT
+    finish_ok
+    exit 0
+  fi
+  "$GPRS_SCRIPT" down
+  trap - EXIT
+fi
+
+echo "$(ts) ERROR: correo falló también por GPRS — se conservan $OUTDIR y $SRC"
 exit 1

@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+EnvironmentFile=-/etc/zeromatic/gprs.env
 Environment=MODEM_TYPE=gsm
 Environment=MODEM_DEVICE=/dev/ttyUSB0
 Environment=MODEM_BAUD=115200

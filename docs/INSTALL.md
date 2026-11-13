@@ -30,6 +30,8 @@ sudo nano /etc/zeromatic/email.env
 
 Necesitas una [contraseña de aplicación de Gmail](https://myaccount.google.com/apppasswords) (cuenta con 2FA).
 
+**Fallback GPRS (opcional):** copia `etc/gprs.env.example` a `/etc/zeromatic/gprs.env`, define `GPRS_APN` y `apt install ppp`. Si falla WiFi al enviar un mensaje de voz, el post-procesado usa datos 2G automáticamente.
+
 ## 3. Locución y servicio
 
 ```bash
