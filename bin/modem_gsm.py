@@ -114,6 +114,38 @@ class GsmModem:
             logging.warning("Modem ERROR en %s", command)
         return text
 
+    def cmd_wait_final_ok(self, command: str, wait: float = 8.0) -> str:
+        """AT hasta línea final OK/ERROR (no cortar si el cuerpo contiene «OK»)."""
+        try:
+            self.ser.reset_input_buffer()
+        except Exception:
+            pass
+        self.write((command + "\r").encode("ascii", errors="ignore"))
+        end = time.time() + wait
+        buf = bytearray()
+        while time.time() < end:
+            chunk = self.ser.read(512)
+            if chunk:
+                buf.extend(chunk)
+                text = buf.decode("latin1", errors="replace")
+                norm = text.replace("\r\n", "\n").replace("\r", "\n")
+                if "\nOK\n" in norm or norm.rstrip() in {"OK", "ERROR"}:
+                    if norm.rstrip().endswith("\nOK") or norm.rstrip().endswith("\nERROR"):
+                        break
+                    if norm.endswith("\nOK\n") or norm.endswith("\nERROR\n"):
+                        break
+                    # Respuesta mínima "AT\r\nOK"
+                    if norm.strip() in {"OK", "ERROR"}:
+                        break
+            else:
+                time.sleep(0.02)
+        if self.ser.in_waiting:
+            buf.extend(self.ser.read(self.ser.in_waiting))
+        text = bytes(buf).decode("latin1", errors="replace")
+        show = text.replace("\r", "\\r").replace("\n", "\\n")
+        logging.info("AT >>> %s <<< %r", command, show[:220])
+        return text
+
     def probe_at(self, wait: float = 1.2) -> bool:
         r = self.cmd("AT", wait=wait, expect_ok=False)
         return "OK" in r.upper()
@@ -377,8 +409,15 @@ class GsmModem:
         return ids
 
     def sms_read(self, index: int) -> dict[str, str] | None:
-        """Lee un SMS. Devuelve {index,status,sender,time,text} o None."""
-        r = self.cmd(f"AT+CMGR={index}", wait=5.0, expect_ok=False)
+        """Lee un SMS. Devuelve metadatos + texto (PDU si hace falta para multipart)."""
+        pdu = self._sms_read_pdu(index)
+        if pdu:
+            return pdu
+        return self._sms_read_text(index)
+
+    def _sms_read_text(self, index: int) -> dict[str, str] | None:
+        """Modo texto AT+CMGF=1 (respaldo)."""
+        r = self.cmd_wait_final_ok(f"AT+CMGR={index}", wait=10.0)
         if "ERROR" in r.upper() and "+CMGR:" not in r.upper():
             return None
         lines = [ln.strip() for ln in r.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
@@ -396,7 +435,6 @@ class GsmModem:
                 body_lines.append(ln)
         if not header:
             return None
-        # +CMGR: "REC UNREAD","+346…","","yy/mm/dd,hh:mm:ss+zz"
         parts: list[str] = []
         cur = ""
         in_q = False
@@ -430,6 +468,49 @@ class GsmModem:
             "time": when,
             "text": text,
         }
+
+    def _sms_read_pdu(self, index: int) -> dict[str, str] | None:
+        """Lee PDU (multipart) y restaura modo texto."""
+        self.cmd("AT+CMGF=0", wait=2.0, expect_ok=False)
+        r = self.cmd_wait_final_ok(f"AT+CMGR={index}", wait=12.0)
+        self.cmd("AT+CMGF=1", wait=2.0, expect_ok=False)
+        if "ERROR" in r.upper() and "+CMGR:" not in r.upper():
+            return None
+        pdu_hex = ""
+        for ln in r.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            ln = ln.strip()
+            if not ln or ln.upper() in {"OK", "ERROR"}:
+                continue
+            if ln.upper().startswith("+CMGR:"):
+                tail = ln.split(":", 1)[1].strip()
+                # +CMGR: <len> o +CMGR: <len>,<stat>...
+                if tail:
+                    maybe = tail.split(",")[0].strip()
+                    if maybe.isdigit():
+                        continue
+                continue
+            if all(c in "0123456789ABCDEFabcdef" for c in ln):
+                pdu_hex = ln
+                break
+        if not pdu_hex:
+            return None
+        decoded = pdu_decode_deliver(pdu_hex)
+        if not decoded:
+            return None
+        out: dict[str, str] = {
+            "index": str(index),
+            "status": "",
+            "sender": decoded.get("sender", ""),
+            "time": decoded.get("time", ""),
+            "text": decoded.get("text", ""),
+        }
+        concat = decoded.get("concat")
+        if concat:
+            ref, total, part = concat
+            out["concat_ref"] = str(ref)
+            out["concat_total"] = str(total)
+            out["concat_part"] = str(part)
+        return out
 
     def sms_delete(self, index: int) -> bool:
         r = self.cmd(f"AT+CMGD={index}", wait=3.0, expect_ok=False)
@@ -887,6 +968,280 @@ def parse_clcc_number(line: str) -> str:
         return ""
     # El MSISDN va entre comillas (primer campo entre comillas)
     return parse_clip(u)
+
+
+_GSM7_CHARSET = (
+    "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\x1bÆæßÉ !\"#¤%&'()*+,-./"
+    "0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿"
+    "abcdefghijklmnopqrstuvwxyzäöñüà"
+)
+
+
+def _gsm7_unpack(payload: bytes, septet_count: int, skip_septets: int = 0) -> str:
+    chars: list[str] = []
+    for i in range(septet_count):
+        real = i + skip_septets
+        bit = real * 7
+        bi = bit // 8
+        sh = bit % 8
+        if bi >= len(payload):
+            break
+        val = payload[bi] >> sh
+        if sh > 1 and bi + 1 < len(payload):
+            val |= payload[bi + 1] << (8 - sh)
+        val &= 0x7F
+        if val < len(_GSM7_CHARSET):
+            chars.append(_GSM7_CHARSET[val])
+    return "".join(chars)
+
+
+def _udh_septets(ud: bytes) -> int:
+    udh_len = ud[0]
+    return ((udh_len + 1) * 8 + 6) // 7
+
+
+def _bcd_phone(data: bytes, digits: int) -> str:
+    out: list[str] = []
+    for b in data:
+        lo = b & 0x0F
+        hi = (b >> 4) & 0x0F
+        if lo <= 9:
+            out.append(str(lo))
+        if len(out) >= digits:
+            break
+        if hi <= 9:
+            out.append(str(hi))
+        if len(out) >= digits:
+            break
+    num = "".join(out[:digits])
+    return num
+
+
+def _parse_scts(data: bytes) -> str:
+    """SCTS 7 octetos BCD → cadena legible."""
+    if len(data) < 7:
+        return ""
+    def nybble(i: int) -> str:
+        hi, lo = data[i] >> 4, data[i] & 0x0F
+        return f"{lo}{hi}"
+    return (
+        f"{nybble(0)}/{nybble(1)[:2]}/{nybble(1)[2:]},"
+        f"{nybble(2)}:{nybble(3)}:{nybble(4)}+{nybble(5)}{nybble(6)}"
+    )
+
+
+def _parse_concat_udh(ud: bytes) -> tuple[int, int, int] | None:
+    """UDH estándar 8-bit ref (IEI 0x00, IEL 3)."""
+    if len(ud) < 6:
+        return None
+    udh_len = ud[0]
+    if udh_len < 5 or len(ud) < 1 + udh_len:
+        return None
+    body = ud[1 : 1 + udh_len]
+    if len(body) >= 5 and body[0] == 0x00 and body[1] == 0x03:
+        ref, total, part = body[2], body[3], body[4]
+        if total > 1 and 1 <= part <= total:
+            return ref, total, part
+    if len(body) >= 6 and body[0] == 0x08 and body[1] == 0x04:
+        ref = (body[2] << 8) | body[3]
+        total, part = body[4], body[5]
+        if total > 1 and 1 <= part <= total:
+            return ref, total, part
+    return None
+
+
+def pdu_decode_deliver(pdu_hex: str) -> dict[str, object] | None:
+    """Decodifica PDU SMS-DELIVER (recibido)."""
+    try:
+        raw = bytes.fromhex(pdu_hex.strip())
+    except ValueError:
+        return None
+    if len(raw) < 10:
+        return None
+    off = 0
+    smsc_len = raw[0]
+    off = 1 + smsc_len
+    if off >= len(raw):
+        return None
+    first = raw[off]
+    off += 1
+    if (first & 0x03) != 0:
+        return None
+    udhi = bool(first & 0x40)
+    oa_len = raw[off]
+    off += 1
+    if off >= len(raw):
+        return None
+    oa_type = raw[off]
+    off += 1
+    oa_bytes = (oa_len + 1) // 2
+    if off + oa_bytes > len(raw):
+        return None
+    sender_digits = _bcd_phone(raw[off : off + oa_bytes], oa_len)
+    off += oa_bytes
+    if oa_type & 0x70 == 0x10 and sender_digits and not sender_digits.startswith("+"):
+        sender = "+" + sender_digits
+    else:
+        sender = sender_digits
+    if off + 2 + 7 + 1 > len(raw):
+        return None
+    off += 1  # PID
+    dcs = raw[off]
+    off += 1
+    when = _parse_scts(raw[off : off + 7])
+    off += 7
+    udl = raw[off]
+    off += 1
+    ud = raw[off : off + udl]
+    if len(ud) < udl:
+        ud = raw[off:]
+    concat = _parse_concat_udh(ud) if udhi else None
+    alphabet = (dcs >> 2) & 0x03
+    if alphabet == 1:  # 8-bit
+        payload = ud[1 + ud[0] :] if udhi else ud
+        text = payload.decode("latin1", errors="replace")
+    elif alphabet == 2:  # UCS2
+        payload = ud[1 + ud[0] :] if udhi else ud
+        text = payload.decode("utf-16-be", errors="replace")
+    else:  # 7-bit default
+        skip = _udh_septets(ud) if udhi else 0
+        payload_septets = udl - skip if udhi else udl
+        if payload_septets < 0:
+            payload_septets = 0
+        text = _gsm7_unpack(ud, payload_septets, skip_septets=skip)
+    out: dict[str, object] = {"sender": sender, "time": when, "text": text}
+    if concat:
+        out["concat"] = concat
+    return out
+
+
+def _parse_modem_sms_time(when: str) -> tuple[int, ...] | None:
+    """26/11/18,13:37:06+04 → ordenable (y, m, d, h, mi, s)."""
+    import re
+
+    m = re.match(
+        r"(\d{2})/(\d{2})/(\d{2}),(\d{2}):(\d{2}):(\d{2})",
+        (when or "").strip(),
+    )
+    if not m:
+        return None
+    yy, mo, dd, hh, mi, ss = (int(x) for x in m.groups())
+    return (2000 + yy, mo, dd, hh, mi, ss)
+
+
+def _sms_time_delta_sec(a: str, b: str) -> float | None:
+    ta, tb = _parse_modem_sms_time(a), _parse_modem_sms_time(b)
+    if not ta or not tb:
+        return None
+    from datetime import datetime
+
+    da = datetime(*ta)
+    db = datetime(*tb)
+    return abs((db - da).total_seconds())
+
+
+def _merge_burst_batches(batches: list[dict[str, object]], gap_sec: float) -> list[dict[str, object]]:
+    """Varios SMS del mismo remitente en poco tiempo (sin UDH) → un solo correo."""
+    if gap_sec <= 0:
+        return batches
+    incompletes = [b for b in batches if b.get("incomplete")]
+    work = [b for b in batches if not b.get("incomplete")]
+    multis = [b for b in work if len(b.get("indices") or []) != 1]
+    singles = [b for b in work if len(b.get("indices") or []) == 1]
+    if len(singles) < 2:
+        return batches
+
+    singles.sort(
+        key=lambda b: (
+            _parse_modem_sms_time(str(b.get("time") or "")) or (9999, 12, 31, 23, 59, 59),
+            int((b.get("indices") or [0])[0]),
+        )
+    )
+    chains: list[list[dict[str, object]]] = []
+    chain: list[dict[str, object]] = []
+    for b in singles:
+        if not chain:
+            chain = [b]
+            continue
+        same_sender = (chain[0].get("sender") or "") == (b.get("sender") or "")
+        gap = _sms_time_delta_sec(
+            str(chain[-1].get("time") or ""),
+            str(b.get("time") or ""),
+        )
+        if same_sender and gap is not None and gap <= gap_sec:
+            chain.append(b)
+        else:
+            chains.append(chain)
+            chain = [b]
+    if chain:
+        chains.append(chain)
+
+    flattened: list[dict[str, object]] = []
+    for link in chains:
+        if len(link) == 1:
+            flattened.append(link[0])
+            continue
+        texts = [str(c.get("text") or "") for c in link]
+        flattened.append(
+            {
+                "indices": [int(i) for c in link for i in (c.get("indices") or [])],
+                "messages": [m for c in link for m in (c.get("messages") or [])],
+                "incomplete": False,
+                "text": "\n".join(t for t in texts if t),
+                "sender": link[0].get("sender") or "",
+                "time": link[0].get("time") or "",
+                "burst_merged": True,
+            }
+        )
+    return incompletes + multis + flattened
+
+
+def group_sms_messages(
+    messages: list[dict[str, str]],
+    *,
+    burst_gap_sec: float = 45.0,
+) -> list[dict[str, object]]:
+    """Agrupa partes multipart (UDH) y ráfagas del mismo remitente."""
+    singles: list[dict[str, object]] = []
+    multipart: dict[tuple[str, str, str], list[dict[str, str]]] = {}
+    for m in messages:
+        ref = (m.get("concat_ref") or "").strip()
+        total = (m.get("concat_total") or "").strip()
+        part = (m.get("concat_part") or "").strip()
+        if ref and total and part:
+            key = (m.get("sender") or "", ref, total)
+            multipart.setdefault(key, []).append(m)
+        else:
+            singles.append(
+                {
+                    "indices": [int(m["index"])],
+                    "messages": [m],
+                    "incomplete": False,
+                    "text": m.get("text") or "",
+                    "sender": m.get("sender") or "",
+                    "time": m.get("time") or "",
+                }
+            )
+    for _key, parts in multipart.items():
+        try:
+            parts.sort(key=lambda x: int(x.get("concat_part") or 0))
+            total_n = int(parts[0].get("concat_total") or "0")
+        except ValueError:
+            singles.append({"indices": [int(p["index"]) for p in parts], "messages": parts, "incomplete": False})
+            continue
+        have = {int(p.get("concat_part") or 0) for p in parts}
+        incomplete = total_n > 1 and have != set(range(1, total_n + 1))
+        singles.append(
+            {
+                "indices": [int(p["index"]) for p in parts],
+                "messages": parts,
+                "incomplete": incomplete,
+                "text": "".join(p.get("text") or "" for p in parts),
+                "sender": parts[0].get("sender") or "",
+                "time": parts[0].get("time") or "",
+            }
+        )
+    return _merge_burst_batches(singles, burst_gap_sec)
 
 
 def decode_sms_body(body: str) -> str:

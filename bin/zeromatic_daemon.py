@@ -78,6 +78,10 @@ SMS_FORWARD = os.environ.get("SMS_FORWARD", "1").strip().lower() not in {
 }
 SMS_MAIL_TO = os.environ.get("SMS_MAIL_TO", "").strip()
 SMS_POLL_SEC = float(os.environ.get("SMS_POLL_SEC", "45"))
+# Tras +CMTI, esperar quietud antes de leer/borrar (varios SMS seguidos del mismo remitente)
+SMS_BURST_WAIT_SEC = float(os.environ.get("SMS_BURST_WAIT_SEC", "18"))
+# Unir en un correo SMS del mismo remitente si el hueco entre partes es menor (segundos)
+SMS_BURST_GAP_SEC = float(os.environ.get("SMS_BURST_GAP_SEC", "45"))
 SMS_LLAMAR = os.environ.get("SMS_LLAMAR", "1").strip().lower() not in {
     "0",
     "false",
@@ -1106,56 +1110,73 @@ def forward_sms_and_delete(modem, index: int | None = None) -> int:
         sys.path.insert(0, str(INSTALL_ROOT / "bin"))
         from send_mail import send_sms_forward  # noqa: WPS433
 
+    from modem_gsm import group_sms_messages  # noqa: WPS433
+
     done = 0
-    indices: list[int]
-    if index is not None:
-        indices = [index]
-    else:
-        try:
-            indices = modem.sms_list_indices()
-        except Exception:
-            logging.exception("No se pudo listar SMS")
-            return 0
+    try:
+        indices = modem.sms_list_indices()
+    except Exception:
+        logging.exception("No se pudo listar SMS")
+        return 0
+    if index is not None and index not in indices:
+        indices = list(dict.fromkeys([index, *indices]))
+    messages: list[dict[str, str]] = []
     for idx in indices:
         try:
             msg = modem.sms_read(idx)
-            if not msg:
+            if msg:
+                messages.append(msg)
+            else:
                 logging.warning("SMS %d ilegible — skip", idx)
-                continue
-            sender = msg.get("sender") or "?"
-            when = msg.get("time") or ""
-            text = msg.get("text") or ""
+        except Exception:
+            logging.exception("No se pudo leer SMS#%s", idx)
+    for batch in group_sms_messages(messages, burst_gap_sec=SMS_BURST_GAP_SEC):
+        if batch.get("incomplete"):
+            parts = batch.get("messages") or []
             logging.info(
-                "SMS#%d de %s (%s): %s",
-                idx,
-                sender,
-                when,
-                (text[:80] + "…") if len(text) > 80 else text,
+                "SMS multipart incompleto (%d partes en SIM) — esperando el resto",
+                len(parts),
             )
+            continue
+        idx_list = [int(i) for i in batch.get("indices") or []]
+        sender = str(batch.get("sender") or "?")
+        when = str(batch.get("time") or "")
+        text = str(batch.get("text") or "")
+        tag = "ráfaga" if batch.get("burst_merged") else "unificado"
+        logging.info(
+            "SMS %s índices %s de %s (%s): %s",
+            tag,
+            idx_list,
+            sender,
+            when,
+            (text[:80] + "…") if len(text) > 80 else text,
+        )
+        try:
             mail_ok = False
             if SMS_FORWARD:
                 send_sms_forward(sender, when, text, mail_to=SMS_MAIL_TO or None)
                 mail_ok = True
             else:
-                mail_ok = True  # sin reenvío: permitir borrar tras LLAMAR
+                mail_ok = True
 
             llamar = parse_sms_llamar(text) if SMS_LLAMAR else None
             if llamar:
                 number, spoken = llamar
-                logging.info("SMS#%d comando LLAMAR → %s", idx, number)
+                logging.info("SMS → LLAMAR %s (partes %s)", number, idx_list)
                 ok_call = sms_dial_and_speak(modem, number, spoken)
                 if not ok_call:
-                    logging.error("SMS#%d LLAMAR no completó la llamada", idx)
+                    logging.error("LLAMAR no completó (SMS %s)", idx_list)
 
-            # Borrar si el correo OK (o reenvío desactivado). LLAMAR fallido no retiene el SMS
-            # para no reintentar en bucle; el correo ya documenta el comando.
-            if mail_ok and modem.sms_delete(idx):
-                done += 1
-                logging.info("SMS#%d procesado y borrado", idx)
-            elif mail_ok:
-                logging.error("SMS#%d procesado pero no se borró de la SIM", idx)
+            for idx in idx_list:
+                if mail_ok and modem.sms_delete(idx):
+                    done += 1
+                    logging.info("SMS#%d procesado y borrado", idx)
+                elif mail_ok:
+                    logging.error("SMS#%d procesado pero no se borró de la SIM", idx)
         except Exception:
-            logging.exception("Fallo procesando SMS#%s — se conserva en la SIM", idx)
+            logging.exception(
+                "Fallo procesando SMS %s — se conservan en la SIM", idx_list
+            )
     return done
 
 
@@ -1309,6 +1330,25 @@ def main_gsm() -> int:
         rings = 0
         last_clcc_poll = 0.0
         last_sms_poll = 0.0
+        sms_flush_at = 0.0
+
+        def schedule_sms_flush() -> None:
+            nonlocal sms_flush_at
+            sms_flush_at = time.time() + SMS_BURST_WAIT_SEC
+
+        def flush_sms_if_due() -> None:
+            nonlocal sms_flush_at, last_sms_poll
+            if not SMS_FORWARD or not sms_flush_at or time.time() < sms_flush_at:
+                return
+            sms_flush_at = 0.0
+            try:
+                n = forward_sms_and_delete(modem)
+                if n:
+                    logging.info("SMS reenviados tras agrupación: %d", n)
+            except Exception:
+                logging.exception("Procesar SMS agrupados falló")
+            last_sms_poll = time.time()
+
         need = max(1, RINGS_TO_ANSWER)
         logging.info(
             "Esperando llamadas/SMS GSM (RING %d; SMS→%s)…",
@@ -1325,6 +1365,7 @@ def main_gsm() -> int:
                 logging.exception("Barrido SMS inicial falló")
             last_sms_poll = time.time()
         while running:
+            flush_sms_if_due()
             etype, text = modem.read_event(timeout=0.8)
             if not etype:
                 now = time.time()
@@ -1333,7 +1374,12 @@ def main_gsm() -> int:
                     last_clcc_poll = now
                     etype, text = modem.poll_incoming()
                 # Barrido periódico de SMS por si se perdió +CMTI
-                if not etype and SMS_FORWARD and now - last_sms_poll >= SMS_POLL_SEC:
+                if (
+                    not etype
+                    and SMS_FORWARD
+                    and now - last_sms_poll >= SMS_POLL_SEC
+                    and (not sms_flush_at or now >= sms_flush_at)
+                ):
                     last_sms_poll = now
                     try:
                         forward_sms_and_delete(modem)
@@ -1347,12 +1393,12 @@ def main_gsm() -> int:
                 caller = extracted
             if etype == "sms":
                 idx = modem.parse_cmti_index(text)
-                logging.info("SMS nuevo indicado: %s", text.strip())
-                try:
-                    forward_sms_and_delete(modem, index=idx)
-                except Exception:
-                    logging.exception("Procesar +CMTI falló")
-                last_sms_poll = time.time()
+                logging.info(
+                    "SMS nuevo indicado: %s (agrupar %.0fs)",
+                    text.strip(),
+                    SMS_BURST_WAIT_SEC,
+                )
+                schedule_sms_flush()
                 continue
             if etype == "ring":
                 rings += 1
@@ -1385,12 +1431,12 @@ def main_gsm() -> int:
                     if caller:
                         logging.info("Caller-ID: %s", caller)
                 elif u.startswith("+CMTI:"):
-                    idx = modem.parse_cmti_index(text)
-                    try:
-                        forward_sms_and_delete(modem, index=idx)
-                    except Exception:
-                        logging.exception("Procesar +CMTI (line) falló")
-                    last_sms_poll = time.time()
+                    logging.info(
+                        "SMS nuevo (línea): %s (agrupar %.0fs)",
+                        text.strip()[:80],
+                        SMS_BURST_WAIT_SEC,
+                    )
+                    schedule_sms_flush()
                 elif "NO CARRIER" in u:
                     logging.info("NO CARRIER (idle)")
                     rings = 0
